@@ -1,0 +1,14 @@
+[project]
+name = "leltariv-application"
+version = "0.1.0"
+description = "Use case-ek és tranzakciókezelés"
+requires-python = ">=3.12,<3.13"
+dependencies = ["leltariv-contracts", "leltariv-domain"]
+
+[tool.uv.sources]
+leltariv-contracts = { workspace = true }
+leltariv-domain = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

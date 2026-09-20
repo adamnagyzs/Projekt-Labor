@@ -1,0 +1,20 @@
+[project]
+name = "leltariv-infrastructure"
+version = "0.1.0"
+description = "Adatelérés, Alembic migrációk, Excel be- és kimenet"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "leltariv-domain",
+    "sqlalchemy>=2.0.35",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.13",
+    "openpyxl>=3.1",
+    "pydantic-settings>=2.5",
+]
+
+[tool.uv.sources]
+leltariv-domain = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
