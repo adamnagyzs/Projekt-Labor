@@ -1,0 +1,25 @@
+[project]
+name = "leltariv-server"
+version = "0.1.0"
+description = "FastAPI szerver: végpontok, hitelesítés, jogosultság"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "leltariv-contracts",
+    "leltariv-application",
+    "leltariv-infrastructure",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pyjwt>=2.9",
+    "passlib[bcrypt]>=1.7",
+    "httpx>=0.27",
+    "pydantic-settings>=2.5",
+]
+
+[tool.uv.sources]
+leltariv-contracts = { workspace = true }
+leltariv-application = { workspace = true }
+leltariv-infrastructure = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

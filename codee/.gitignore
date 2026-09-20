@@ -1,0 +1,25 @@
+# forrásadat — nem publikus, a 262 metaadatában munkatárs neve van
+*.XLSX
+*.xlsx
+
+# titkok
+.env
+.env.local
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.pyright/
+
+# build
+dist/
+build/
+*.egg-info/
+
+# supabase
+volumes/db/data/
+volumes/storage/
+supabase-src/
