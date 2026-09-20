@@ -1,0 +1,33 @@
+#!/bin/sh
+# git pull utan szinkronba hozza a kornyezetet.
+# Bekapcsolas klononkent egyszer:  git config core.hooksPath .githooks
+
+root=$(git rev-parse --show-toplevel)
+changed=$(git diff-tree -r --name-only ORIG_HEAD HEAD 2>/dev/null) || exit 0
+
+say() { printf '[hook] %s\n' "$1"; }
+
+if printf '%s\n' "$changed" | grep -qE '(^|/)(uv\.lock|pyproject\.toml)$'; then
+    if command -v uv >/dev/null 2>&1; then
+        say "fuggoseg valtozott -> uv sync"
+        (cd "$root/codee" && uv sync)
+    else
+        say "fuggoseg valtozott, de nincs uv a PATH-ban."
+        say "futtasd kezzel:  cd codee ; uv sync"
+    fi
+fi
+
+if printf '%s\n' "$changed" | grep -q 'migrations/'; then
+    say "uj adatbazis-migracio erkezett ->  cd codee ; uv run alembic upgrade head"
+fi
+
+if printf '%s\n' "$changed" | grep -q '\.env\.example$'; then
+    say "a .env.example valtozott -> nezd meg, kell-e uj kulcs a sajat .env-edbe"
+fi
+
+if printf '%s\n' "$changed" | grep -q 'docker-compose\.yml$'; then
+    say "a compose valtozott ->  docker compose up -d"
+fi
+
+# soha ne bukjon el tole a pull
+exit 0
