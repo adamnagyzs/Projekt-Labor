@@ -1,0 +1,54 @@
+# Leltárív — fejlesztői adatbázis.
+#
+# 1. fázis (ez a fájl): PostgreSQL + pgAdmin. Külső fájl nem kell hozzá, azonnal indul.
+#    Ezen fut a migráció, a seed és a szerver, AUTH_MODE=local mellett.
+# 2. fázis: a Supabase-stack (db, kong, meta, studio, auth, storage). A lépések a SETUP.md-ben;
+#    az a compose a Supabase repóból jön, mert a volumes/ alatti konfigurációkat nem írjuk kézzel.
+#
+# Indítás:  docker compose up -d
+# Állapot:  docker compose ps
+# Leállás:  docker compose down          (az adat megmarad)
+#           docker compose down -v       (az adat is törlődik)
+
+name: leltariv
+
+services:
+  db:
+    image: postgres:17
+    container_name: leltariv-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-leltariv}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-leltar2026}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-leltariv}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: leltariv-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@leltariv.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-leltar2026}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+
+volumes:
+  db-data:
+  pgadmin-data:

@@ -20,27 +20,128 @@ codee/
 └── tests/test_contracts.py három teszt, hogy a CI-nak legyen mit futtatnia
 ```
 
-## Ami még hiányzik: a compose
+## Az adatbázis — 1. fázis (ez van most)
 
-A hivatalos Supabase-fájl háromszáz sor healthcheckkel, volume-okkal és init-szkriptekkel.
-Újragépelve elromlik, ezért másolni kell:
+`docker-compose.yml`: PostgreSQL 17 + pgAdmin. Külső fájl nem kell hozzá, azonnal indul.
 
 ```bash
-git clone --depth 1 https://github.com/supabase/supabase supabase-src
+docker compose up -d
 ```
 
-Ezután a `supabase-src/docker/` mappából ide kell a `docker-compose.yml`, a `volumes/` mappa és a
-`.env.example` (ez utóbbit fésüld össze az itt lévővel).
+Ezen fut a migráció, a seed és a szerver `AUTH_MODE=local` mellett. A séma a pgAdminban
+megnézhető és megmutatható: `http://localhost:5050`, a belépés a `.env`-ben lévő
+`PGADMIN_EMAIL` / `PGADMIN_PASSWORD` párral. A szerverhez a kapcsolat:
+host `leltariv-db`, port `5432`.
 
-A compose-ból töröld ezt a hat service-blokkot és minden rájuk mutató `depends_on` sort:
-`rest`, `realtime`, `functions`, `analytics`, `vector`, `supavisor`.
-Marad: `db`, `kong`, `meta`, `studio`, `auth`, `storage`, `imgproxy`.
+| Port | Mi |
+|---|---|
+| 8000 | FastAPI |
+| 5432 | PostgreSQL |
+| 5050 | pgAdmin |
 
-A `volumes/api/kong.yml`-ben maradnak útvonalak a törölt PostgREST felé — ezek 502-t adnak, de
-semmi mást nem rontanak el. Ha a `storage` vagy az `imgproxy` makacskodik, azok hagyhatók el
-elsőként: a prototípusban még nincs eszközfotó.
+## Az adatbázis — 2. fázis: a Supabase-stack
 
-## Portkiosztás
+A dolgozat 10.2 fejezete a Supabase-stacket írja le infrastruktúraként (db, kong, meta, studio,
+auth, storage). A prototípus a sima Postgresen indult, mert az azonnal futott; a stack ráépül, a
+séma és a seed változatlan marad. Az átállás annyi, hogy a `DATABASE_URL` a Supabase `db`
+szolgáltatására mutat, és az `AUTH_MODE` `gotrue`-ra vált.
+
+**Ez nem a bemutató előtti feladat.** A hivatalos telepítés kulcsgeneráló szkripteket futtat és
+tíznél több konténert indít; erre akkor kerül sor, amikor van rá egy nyugodt délután.
+
+A leírás: <https://supabase.com/docs/guides/self-hosting/docker>
+
+### A telepítés
+
+A `.sh` szkriptek miatt ezt **Git Bashban** futtasd, ne PowerShellben. A verziót érdemes tagre
+fixálni, mert a `main` ágon a compose hetente változik:
+
+```bash
+git clone --depth 1 --branch self-hosted/v0.8.1 https://github.com/supabase/supabase supabase-src
+```
+
+```bash
+mkdir -p supabase && cp -rf supabase-src/docker/. supabase/
+```
+
+```bash
+cd supabase && cp .env.example .env
+```
+
+A titkokat **nem kézzel írjuk be**, hanem generáljuk — a leírás kifejezetten figyelmeztet, hogy a
+`.env.example` alapértékeit soha ne hagyjuk bent:
+
+```bash
+sh utils/generate-keys.sh
+```
+
+```bash
+sh utils/add-new-auth-keys.sh
+```
+
+Ez állítja elő a `JWT_SECRET`-et, a `SUPABASE_PUBLISHABLE_KEY`-t és a `SUPABASE_SECRET_KEY`-t,
+valamint a többi kötelező kulcsot (`SECRET_KEY_BASE`, `VAULT_ENC_KEY` — pontosan 32 karakter,
+`REALTIME_DB_ENC_KEY` — pontosan 16, `PG_META_CRYPTO_KEY`).
+
+### Amit a `.env`-ben át kell állítani
+
+A Supabase mindent a Kongon keresztül szolgál ki, és **gyárilag a 8000-es porton** — ott viszont a
+FastAPI van. Ezért:
+
+```
+KONG_HTTP_PORT=8100
+KONG_HTTPS_PORT=8143
+SUPABASE_PUBLIC_URL=http://localhost:8100
+API_EXTERNAL_URL=http://localhost:8100/auth/v1
+SITE_URL=http://localhost:8100
+DASHBOARD_USERNAME=leltariv
+DASHBOARD_PASSWORD=...          # tartalmazzon legalább egy betűt, különben a Studio nem engedi be
+POSTGRES_PASSWORD=...
+```
+
+### Indítás
+
+```bash
+docker compose pull
+```
+
+```bash
+docker compose up -d --wait
+```
+
+A Studio ezután a `http://localhost:8100` címen van, basic authtal (a `DASHBOARD_*` párral). A
+REST, az Auth és a Storage ugyanazon a porton, `/rest/v1/`, `/auth/v1/`, `/storage/v1/` alatt.
+
+### Mit lehet kivenni
+
+A leírás négy szolgáltatást nevez meg elhagyhatóként: **Realtime, Storage, imgproxy, Edge
+Runtime**. Amíg nincs eszközfotó, a Storage és az imgproxy is mehet — ezzel jelentősen csökken a
+memóriaigény.
+
+**A PostgREST-et viszont hagyd bent.** A Studio tábla- és SQL-szerkesztője azon keresztül dolgozik,
+tehát ha kiveszed, a Studio felét elveszíted. Ez nem mond ellent az architektúránknak: az állításunk
+nem az, hogy a PostgREST nem létezik, hanem hogy **a kliens nem hívja** — a Kong és a PostgREST a
+konténerhálózaton belül marad, a kliens gépéről nem érhető el. A dolgozat 10.3 fejezete pontosan ezt
+írja; a 10.2 táblájában a `rest` sorát viszont „nem használjuk"-ról „csak a Studio használja
+belülről"-re kell javítani.
+
+### Átállás a mi alkalmazásunkban
+
+Két sor a `codee/.env`-ben:
+
+```
+DATABASE_URL=postgresql+psycopg://postgres:<supabase_postgres_password>@localhost:5432/postgres
+AUTH_MODE=gotrue
+GOTRUE_URL=http://localhost:8100/auth/v1
+JWT_SECRET=<a supabase/.env-bol atmasolva>
+```
+
+A séma és a seed változatlan marad, mert mindkét fázisban ugyanaz a PostgreSQL.
+
+> A `supabase/.env` **valódi titkokat tartalmaz** a generálás után. A gyökér `.gitignore` minden
+> `.env`-et kizár, de érdemes ellenőrizni, hogy tényleg nem jelenik-e meg a `git status`-ban.
+
+## Portkiosztás a 2. fázisban
 
 A Supabase gyárilag a **8000-es portra teszi a Kongot**, ami ütközne a FastAPI-val. Ezért a
 `.env`-ben `KONG_HTTP_PORT=8100`.
