@@ -1,10 +1,14 @@
 import traceback
-from typing import Callable, Any
-from PySide6.QtCore import QRunnable, Slot, Signal, QObject
+from collections.abc import Callable
+from typing import Any
+
+from PySide6.QtCore import QObject, QRunnable, Signal, Slot
+
 
 class WorkerSignals(QObject):
     finished = Signal(object)
     error = Signal(str)
+
 
 class Worker(QRunnable):
     def __init__(self, fn: Callable[..., Any], *args: Any, **kwargs: Any):
