@@ -28,6 +28,10 @@ jobs:
       # A futtaton nincs kijelzo. Enelkul minden Qt-t importalo teszt elhasal,
       # meg az is, ami csak behuzza a PySide6-ot.
       QT_QPA_PLATFORM: offscreen
+      # A futtaton van eleve egy rendszer-Python; enelkul az uv azt hasznalna, es
+      # a CI mas patch-verzion futna, mint a mi gepeink. Igy a .python-version
+      # szerinti managed interpreter jon, es cache-elheto is.
+      UV_PYTHON_PREFERENCE: only-managed
 
     # A workspace a codee/ alatt van, nem a repo gyokereben.
     defaults:
