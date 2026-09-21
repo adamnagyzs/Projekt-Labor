@@ -30,6 +30,21 @@ venvPath = "."
 venv = ".venv"
 reportMissingTypeStubs = false
 
+# A Qt-réteg nem tartható strict módban: a signal–slot kapcsolatok és a QAbstractTableModel
+# felüldefiniált metódusai a keretrendszer oldalán tipizálatlanok, ezért a pyright minden
+# paramétert és visszatérési értéket Unknownnak lát. Az üzleti rétegek (contracts, domain,
+# application, infrastructure, server) strict módban maradnak — ott van értéke, mert ott
+# a mi típusaink mennek át a határokon.
+[[tool.pyright.executionEnvironments]]
+root = "packages/client/src"
+reportUnknownParameterType = false
+reportMissingParameterType = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportUnknownLambdaType = false
+reportMissingTypeArgument = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
