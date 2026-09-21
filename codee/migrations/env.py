@@ -1,12 +1,11 @@
-from logging.config import fileConfig
 import os
+from logging.config import fileConfig
 
+import leltariv_infrastructure.db.models  # noqa: F401
 from alembic import context
 from dotenv import load_dotenv
-from sqlalchemy import engine_from_config, pool
-
 from leltariv_infrastructure.db.base import Base
-import leltariv_infrastructure.db.models  # noqa: F401
+from sqlalchemy import engine_from_config, pool
 
 load_dotenv()
 
