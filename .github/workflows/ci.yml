@@ -20,7 +20,10 @@ permissions:
 
 jobs:
   check:
-    name: lint, tipusok, tesztek
+    # Ez a nev a `main` branch protection kotelezo ellenorzese. Ha atirod, a
+    # protection-szabalyban is at kell irni, kulonben orokre "vart ellenorzes"-en all
+    # minden PR. Ezert rovid es stabil.
+    name: lint-types-tests
     # Szandekosan nem ubuntu-latest: az 2026-10-19-en Ubuntu 26-ra valt, az pedig a
     # felev kozepe. A Qt apt-csomagok nevei majorverziok kozott szoktak valtozni,
     # es nem akarunk egy reggel azzal szembesulni, hogy a CI magatol elhasalt.
