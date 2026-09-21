@@ -2,39 +2,104 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
+  workflow_dispatch:
+
+# Egy agon egyszerre egy futas. Ha jon egy ujabb push, a folyamatban levot eldobjuk,
+# hogy ne alljon sorban ket build ugyanarra az agra.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# A workflow csak olvas. Ha kesobb kell tobb (pl. release feltoltes), ott kerjuk el,
+# ne itt globalisan.
+permissions:
+  contents: read
 
 jobs:
-  build:
+  check:
+    name: lint, tipusok, tesztek
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # A futtaton nincs kijelzo. Enelkul minden Qt-t importalo teszt elhasal,
+      # meg az is, ami csak behuzza a PySide6-ot.
+      QT_QPA_PLATFORM: offscreen
+
+    # A workspace a codee/ alatt van, nem a repo gyokereben.
     defaults:
       run:
-        working-directory: ./codee
+        working-directory: codee
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
+      - name: uv telepitese
+        uses: astral-sh/setup-uv@v10
+        with:
+          working-directory: codee
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+          # A managed Python is cache-elve, igy a 3.12 nem tolti le minden futasnal.
+          cache-python: true
 
-    - name: Install uv
-      run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      # A Python verziot a codee/.python-version adja meg, az uv hozza le magatol.
+      # A --frozen azt jelenti: a uv.lock szerint epits, es hasalj el, ha a lock
+      # nincs szinkronban a pyproject.toml-lal. Igy nem tud csendben elcsuszni.
+      - name: Kornyezet felepitese
+        run: uv sync --frozen
 
-    - name: Install dependencies
-      run: uv sync
+      - name: Qt rendszerkonyvtarak
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
 
-    - name: Check formatting with ruff
-      run: uv run ruff format --check .
+      # A negy ellenorzes akkor is lefut, ha egy korabbi elhasalt. Igy egy futasbol
+      # latszik minden hiba, nem kell korozni: javit egyet, push, kiderul a kovetkezo.
+      - name: Formazas
+        if: '!cancelled()'
+        run: uv run ruff format --check --diff .
 
-    - name: Lint with ruff
-      run: uv run ruff check .
+      - name: Lint
+        if: '!cancelled()'
+        # A github formatum inline megjegyzeseket rak a PR diffjere.
+        run: uv run ruff check --output-format=github .
 
-    - name: Type checking with pyright
-      run: uv run pyright
+      - name: Tipusellenorzes
+        if: '!cancelled()'
+        run: uv run pyright
 
-    - name: Run tests with pytest
-      run: uv run pytest
+      - name: Tesztek
+        if: '!cancelled()'
+        run: uv run pytest -q
+
+# ---------------------------------------------------------------------------
+# Amikor jonnek az adatbazis-tesztek (Dani), ez a blokk kerul a check job ala,
+# a `env:` es a `defaults:` kozott:
+#
+#     services:
+#       postgres:
+#         image: postgres:17
+#         env:
+#           POSTGRES_DB: leltariv
+#           POSTGRES_USER: postgres
+#           POSTGRES_PASSWORD: leltar2026
+#         ports: ["5432:5432"]
+#         options: >-
+#           --health-cmd pg_isready
+#           --health-interval 5s
+#           --health-timeout 5s
+#           --health-retries 12
+#
+# es az env-be:
+#     DATABASE_URL: postgresql+psycopg://postgres:leltar2026@localhost:5432/leltariv
+#
+# Amikor jon a PyInstaller + Inno Setup telepito, akkor kell egy masodik job
+# windows-latest futtaton. Addig nem, mert csak lassitana.
+# ---------------------------------------------------------------------------
