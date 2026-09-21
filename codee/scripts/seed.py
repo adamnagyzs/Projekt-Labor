@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import NoReturn
-from uuid import UUID, uuid4
+from uuid import uuid4
 
-from dotenv import load_dotenv
 from leltariv_domain.normalization import (
     is_meaningful_serial_number,
     normalize_code,
@@ -67,7 +64,6 @@ class SeedAsset:
 
 
 def required_source_text(row: Mapping[str, object], column: str) -> str:
-    """Kötelező SAP mező szöveges értéke."""
     value = as_source_text(row.get(column))
     if value is None:
         raise ValueError(f"Hiányzó kötelező mező: {column}")
@@ -75,12 +71,10 @@ def required_source_text(row: Mapping[str, object], column: str) -> str:
 
 
 def optional_source_text(row: Mapping[str, object], column: str) -> str | None:
-    """Opcionális SAP mező szöveges értéke."""
     return as_source_text(row.get(column))
 
 
 def to_int(value: object, field_name: str) -> int:
-    """SAP egész számmező átalakítása."""
     if isinstance(value, bool):
         raise ValueError(f"{field_name} nem lehet logikai érték.")
     if isinstance(value, int):
@@ -101,7 +95,6 @@ def to_int(value: object, field_name: str) -> int:
 
 
 def to_decimal(value: object) -> Decimal | None:
-    """SAP pénzügyi érték átalakítása Decimal típussá."""
     if value is None or value == "":
         return None
     if isinstance(value, bool):
@@ -114,7 +107,6 @@ def to_decimal(value: object) -> Decimal | None:
 
 
 def row_to_seed_asset(row: Mapping[str, object]) -> SeedAsset:
-    """SAP XLSX-sorból adatbázis-seedhez használható eszköz-adatot készít."""
     asset_number = required_source_text(row, "Eszköz")
     sub_number = to_int(row.get("Alszám"), "Alszám")
     inventory_number = optional_source_text(row, "Leltárszám")
@@ -149,39 +141,47 @@ def row_to_seed_asset(row: Mapping[str, object]) -> SeedAsset:
 
 
 def serial_number_can_be_code(serial_number: str | None) -> bool:
-    """A gyári szám asset_code-ként való felvételének szabálya."""
     return is_meaningful_serial_number(serial_number)
 
 
 def asset_codes_for_seed(asset: SeedAsset) -> list[tuple[str, str, bool]]:
-    """Kereshető kódok: kód, típus, elsődleges-e."""
+    """Kereshető, zónán belül egyedi kódok: kód, típus, elsődleges-e."""
     codes: list[tuple[str, str, bool]] = []
+    seen_normalized_codes: set[str] = set()
+
+    def add_code(code: str, code_type: str, is_primary: bool) -> None:
+        normalized = normalize_code(code)
+        if normalized in seen_normalized_codes:
+            return
+
+        seen_normalized_codes.add(normalized)
+        codes.append((code, code_type, is_primary))
 
     if asset.inventory_number is not None:
-        codes.append((asset.inventory_number, "LELTARSZAM", True))
+        add_code(asset.inventory_number, "LELTARSZAM", True)
 
-    codes.append((asset.asset_number, "ESZKOZSZAM", False))
+    add_code(asset.asset_number, "ESZKOZSZAM", False)
 
     if serial_number_can_be_code(asset.serial_number):
         assert asset.serial_number is not None
-        codes.append((asset.serial_number, "GYARI_SZAM", False))
+        add_code(asset.serial_number, "GYARI_SZAM", False)
 
     return codes
 
 
 def get_or_create_zone(session: Session, code: str) -> InventoryZone:
-    """Körzet lekérése vagy létrehozása a háromjegyű kód alapján."""
-    zone = session.scalar(
-        select(InventoryZone).where(InventoryZone.code == code)
-    )
+    zone = session.scalar(select(InventoryZone).where(InventoryZone.code == code))
     if zone is not None:
         return zone
 
-    return InventoryZone(
+    zone = InventoryZone(
         code=code,
         site_code=f"{code}0000000",
         name=ZONE_NAMES.get(code, f"Leltárkörzet {code}"),
     )
+    session.add(zone)
+    session.flush()
+    return zone
 
 
 def get_or_create_asset_type(
@@ -190,7 +190,6 @@ def get_or_create_asset_type(
     name: str,
     name_normalized: str,
 ) -> AssetType:
-    """Eszköztípus lekérése vagy létrehozása normalizált név szerint."""
     asset_type = session.scalar(
         select(AssetType).where(AssetType.name_normalized == name_normalized)
     )
@@ -204,7 +203,6 @@ def get_or_create_asset_type(
 
 
 def get_or_create_period(session: Session) -> InventoryPeriod:
-    """Egy demonstrációs, aktív leltári időszak létrehozása."""
     period = session.scalar(
         select(InventoryPeriod).where(InventoryPeriod.state == "ACTIVE")
     )
@@ -222,14 +220,13 @@ def get_or_create_period(session: Session) -> InventoryPeriod:
 
 
 def seed_users(session: Session) -> None:
-    """A három kötelező alkalmazásszerepkör seedelése."""
-    seed_users = (
+    users = (
         ("Rendszergazda", "ADMIN"),
         ("Leltározó", "LELTAROZO"),
         ("Olvasó", "OLVASO"),
     )
 
-    for display_name, role in seed_users:
+    for display_name, role in users:
         existing = session.scalar(select(AppUser).where(AppUser.role == role))
         if existing is None:
             session.add(
@@ -249,10 +246,8 @@ def create_asset_codes(
     zone: InventoryZone,
     seed_asset: SeedAsset,
 ) -> None:
-    """Az eszköz kereshető kódjainak mentése zónán belüli egyediséggel."""
     for code, code_type, is_primary in asset_codes_for_seed(seed_asset):
         code_normalized = normalize_code(code)
-
         existing = session.scalar(
             select(AssetCode).where(
                 AssetCode.zone_id == zone.id,
@@ -261,11 +256,8 @@ def create_asset_codes(
         )
 
         if existing is not None:
-            if existing.asset_id != asset.id:
-                raise ValueError(
-                    "Ütköző kód ugyanazon körzetben: "
-                    f"zone={zone.code}, code={code_normalized}"
-                )
+            # Ugyanazon körzetben egy kód csak egy eszközhöz tartozhat.
+            # A korábbi importált rekord megmarad, a későbbi ütköző kód kimarad.
             continue
 
         session.add(
@@ -282,7 +274,6 @@ def create_asset_codes(
 
 
 def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
-    """Egy XLSX fájl sorainak betöltése és az importstatisztika visszaadása."""
     rows_read = 0
     rows_ok = 0
     rows_failed = 0
@@ -299,16 +290,12 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
     session.add(batch)
     session.flush()
 
-    pending_parents: dict[tuple[str, str], UUID] = {}
-
     for row in read_asset_rows(path):
         rows_read += 1
 
         try:
             seed_asset = row_to_seed_asset(row)
             zone = get_or_create_zone(session, seed_asset.zone_code)
-            session.flush()
-
             asset_type = get_or_create_asset_type(
                 session,
                 name=seed_asset.name,
@@ -327,24 +314,15 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
                     f"{seed_asset.asset_number}/{seed_asset.sub_number}"
                 )
 
-            parent_key = (seed_asset.asset_number, seed_asset.zone_code)
-            parent_asset_id = None
-            if seed_asset.sub_number == 0:
-                pending_parents[parent_key] = uuid4()
-                asset_id = pending_parents[parent_key]
-            else:
-                asset_id = uuid4()
-                parent_asset_id = pending_parents.get(parent_key)
-
             asset = Asset(
-                id=asset_id,
+                id=uuid4(),
                 asset_number=seed_asset.asset_number,
                 sub_number=seed_asset.sub_number,
                 name=seed_asset.name,
                 name_normalized=seed_asset.name_normalized,
                 zone_id=zone.id,
                 asset_type_id=asset_type.id,
-                parent_asset_id=parent_asset_id,
+                parent_asset_id=None,
                 original_asset=seed_asset.original_asset,
                 tax_ref=seed_asset.tax_ref,
                 activated_on=seed_asset.activated_on,
@@ -366,7 +344,7 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
                 seed_asset=seed_asset,
             )
             rows_ok += 1
-        except (TypeError, ValueError, IntegrityError):
+        except (IntegrityError, TypeError, ValueError):
             rows_failed += 1
             raise
 
@@ -376,27 +354,38 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
 
     return rows_read, rows_ok, rows_failed
 
+def source_paths(source_dir: Path) -> list[Path]:
+    """A két kötelező XLSX forrásfájl ellenőrzött elérési útja."""
+    paths: list[Path] = []
 
-def source_paths(source_dir: Path) -> Iterable[Path]:
-    """A kötelező két XLSX fájl ellenőrzött elérési útja."""
     for file_name in SOURCE_FILES:
         path = source_dir / file_name
+
         if not path.is_file():
             raise FileNotFoundError(f"Hiányzó forrásfájl: {path}")
-        yield path
+
+        paths.append(path)
+
+    return paths
 
 
-def main() -> NoReturn:
+def main() -> None:
     """A teljes fejlesztői seed futtatása."""
-    load_dotenv()
-    source_dir = Path(os.environ["SOURCE_XLSX_DIR"])
+    source_dir = Path(
+        "/Users/ederdaniel/Projekt-Labor/codee/source-data"
+    )
 
     session = SessionLocal()
+
     try:
         get_or_create_period(session)
         seed_users(session)
 
-        totals = [seed_file(session, path) for path in source_paths(source_dir)]
+        totals = [
+            seed_file(session, path)
+            for path in source_paths(source_dir)
+        ]
+
         session.commit()
 
         rows_read = sum(total[0] for total in totals)
@@ -413,8 +402,6 @@ def main() -> NoReturn:
         raise
     finally:
         session.close()
-
-    raise SystemExit(0)
 
 
 if __name__ == "__main__":
