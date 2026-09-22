@@ -9,7 +9,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
-from leltariv_server.api.zones import require_current_user
+from leltariv_server.dependencies import require_current_user
 
 router = APIRouter(prefix="/api/v1", tags=["assets"])
 

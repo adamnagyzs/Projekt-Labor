@@ -19,6 +19,7 @@ __pycache__/
 .pyright/
 
 # build
+*.exe
 dist/
 build/
 *.egg-info/

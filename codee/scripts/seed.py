@@ -29,9 +29,9 @@ from leltariv_infrastructure.db.models import (
     InventoryZone,
 )
 from leltariv_infrastructure.db.session import SessionLocal
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 SOURCE_FILES = (
     "261 lista_20260909.XLSX",
@@ -351,6 +351,31 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
     return rows_read, rows_ok, rows_failed
 
 
+def link_accessories(session: Session) -> int:
+    """A tartozékokat a főeszközükhöz köti, és visszaadja a létrejött kapcsolatok számát.
+
+    A forrásban az alszám hordozza a tartozékszerkezetet: a főeszköz alszáma 0, a
+    tartozékoké 1-től folytatólagos, ugyanazon eszközszám alatt. A kapcsolatot csak az
+    összes fájl beolvasása után lehet megállapítani, mert egy tartozék sora megelőzheti a
+    főeszközéét, és a főeszköz a másik körzet állományában is lehet.
+    """
+    parent = aliased(Asset)
+    parent_id = (
+        select(parent.id)
+        .where(parent.asset_number == Asset.asset_number, parent.sub_number == 0)
+        .scalar_subquery()
+    )
+
+    session.execute(update(Asset).where(Asset.sub_number > 0).values(parent_asset_id=parent_id))
+
+    linked = session.scalar(
+        select(func.count())
+        .select_from(Asset)
+        .where(Asset.sub_number > 0, Asset.parent_asset_id.is_not(None))
+    )
+    return linked or 0
+
+
 def get_source_dir() -> Path:
     """A forrásfájlok mappája.
 
@@ -396,6 +421,7 @@ def main() -> None:
         seed_users(session)
 
         totals = [seed_file(session, path) for path in source_paths(source_dir)]
+        linked = link_accessories(session)
 
         session.commit()
 
@@ -403,7 +429,10 @@ def main() -> None:
         rows_ok = sum(total[1] for total in totals)
         rows_failed = sum(total[2] for total in totals)
 
-        print(f"Seed kész: {rows_ok}/{rows_read} eszköz, {rows_failed} hibás sor.")
+        print(
+            f"Seed kész: {rows_ok}/{rows_read} eszköz, {rows_failed} hibás sor, "
+            f"{linked} tartozék a főeszközéhez kötve."
+        )
     except Exception:
         session.rollback()
         raise
