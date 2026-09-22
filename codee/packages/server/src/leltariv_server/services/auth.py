@@ -36,7 +36,7 @@ def get_current_user(
     try:
         payload = jwt.decode(  # type: ignore[reportUnknownMemberType]
             token,
-            os.environ["JWT_SECRET"],   
+            os.environ["JWT_SECRET"],
             algorithms=[JWT_ALGORITHM],
         )
         user_id = UUID(payload["sub"])

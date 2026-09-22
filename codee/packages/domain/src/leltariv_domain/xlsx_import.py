@@ -92,10 +92,6 @@ def read_asset_rows(path: Path) -> Iterator[dict[str, object]]:
             if not is_asset_row(row):
                 continue
 
-            yield {
-                header: value
-                for header, value in zip(headers, row, strict=False)
-                if header
-            }
+            yield {header: value for header, value in zip(headers, row, strict=False) if header}
     finally:
         workbook.close()

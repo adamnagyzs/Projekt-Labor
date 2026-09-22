@@ -60,6 +60,7 @@ def test_invalid_serial_numbers_are_not_seeded_as_asset_codes() -> None:
         assert not serial_number_can_be_code(serial_number)
         assert all(code_type != "GYARI_SZAM" for _, code_type, _ in asset_codes_for_seed(asset))
 
+
 def test_duplicate_codes_on_same_asset_are_seeded_once() -> None:
     asset = row_to_seed_asset(
         sample_row(

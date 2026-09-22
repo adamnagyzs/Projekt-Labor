@@ -89,9 +89,7 @@ def to_int(value: object, field_name: str) -> int:
     try:
         return int(text_value)
     except ValueError as error:
-        raise ValueError(
-            f"Érvénytelen egész érték: {field_name}={value!r}"
-        ) from error
+        raise ValueError(f"Érvénytelen egész érték: {field_name}={value!r}") from error
 
 
 def to_decimal(value: object) -> Decimal | None:
@@ -203,9 +201,7 @@ def get_or_create_asset_type(
 
 
 def get_or_create_period(session: Session) -> InventoryPeriod:
-    period = session.scalar(
-        select(InventoryPeriod).where(InventoryPeriod.state == "ACTIVE")
-    )
+    period = session.scalar(select(InventoryPeriod).where(InventoryPeriod.state == "ACTIVE"))
     if period is not None:
         return period
 
@@ -310,8 +306,7 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
             )
             if existing_asset is not None:
                 raise ValueError(
-                    "Duplikált eszköz-kulcs: "
-                    f"{seed_asset.asset_number}/{seed_asset.sub_number}"
+                    f"Duplikált eszköz-kulcs: {seed_asset.asset_number}/{seed_asset.sub_number}"
                 )
 
             asset = Asset(
@@ -354,6 +349,7 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
 
     return rows_read, rows_ok, rows_failed
 
+
 def source_paths(source_dir: Path) -> list[Path]:
     """A két kötelező XLSX forrásfájl ellenőrzött elérési útja."""
     paths: list[Path] = []
@@ -371,9 +367,7 @@ def source_paths(source_dir: Path) -> list[Path]:
 
 def main() -> None:
     """A teljes fejlesztői seed futtatása."""
-    source_dir = Path(
-        "/Users/ederdaniel/Projekt-Labor/codee/source-data"
-    )
+    source_dir = Path("/Users/ederdaniel/Projekt-Labor/codee/source-data")
 
     session = SessionLocal()
 
@@ -381,10 +375,7 @@ def main() -> None:
         get_or_create_period(session)
         seed_users(session)
 
-        totals = [
-            seed_file(session, path)
-            for path in source_paths(source_dir)
-        ]
+        totals = [seed_file(session, path) for path in source_paths(source_dir)]
 
         session.commit()
 
@@ -392,11 +383,7 @@ def main() -> None:
         rows_ok = sum(total[1] for total in totals)
         rows_failed = sum(total[2] for total in totals)
 
-        print(
-            "Seed kész: "
-            f"{rows_ok}/{rows_read} eszköz, "
-            f"{rows_failed} hibás sor."
-        )
+        print(f"Seed kész: {rows_ok}/{rows_read} eszköz, {rows_failed} hibás sor.")
     except Exception:
         session.rollback()
         raise

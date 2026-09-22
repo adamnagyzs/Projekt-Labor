@@ -30,9 +30,7 @@ def list_assets(
     session: Session = Depends(get_db_session),  # noqa: B008
 ) -> AssetPage:
     """Körzetre szűrt, név- és kódkeresést támogató eszközlista."""
-    inventory_zone = session.scalar(
-        select(InventoryZone).where(InventoryZone.code == zone)
-    )
+    inventory_zone = session.scalar(select(InventoryZone).where(InventoryZone.code == zone))
     if inventory_zone is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -58,9 +56,7 @@ def list_assets(
         )
 
     base_query = select(Asset).where(*filters)
-    total = session.scalar(
-        select(func.count()).select_from(base_query.subquery())
-    ) or 0
+    total = session.scalar(select(func.count()).select_from(base_query.subquery())) or 0
 
     assets = session.scalars(
         base_query.order_by(Asset.asset_number, Asset.sub_number)

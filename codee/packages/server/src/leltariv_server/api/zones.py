@@ -29,9 +29,7 @@ def list_zones(
     session: Session = Depends(get_db_session),  # noqa: B008
 ) -> list[ZoneOut]:
     """A tokennel elérhető leltárkörzetek listája."""
-    zones = session.scalars(
-        select(InventoryZone).order_by(InventoryZone.code)
-    ).all()
+    zones = session.scalars(select(InventoryZone).order_by(InventoryZone.code)).all()
 
     return [
         ZoneOut(
