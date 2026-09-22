@@ -1,22 +1,13 @@
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends
 from leltariv_contracts.zones import ZoneOut
 from leltariv_infrastructure.db.models import AppUser, InventoryZone
 from leltariv_infrastructure.db.session import get_db_session
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from leltariv_server.services.auth import get_current_user
+from leltariv_server.dependencies import require_current_user
 
 router = APIRouter(prefix="/api/v1", tags=["zones"])
-
-
-def require_current_user(
-    authorization: Annotated[str | None, Header()] = None,
-    session: Session = Depends(get_db_session),  # noqa: B008
-) -> AppUser:
-    return get_current_user(authorization, session)
 
 
 @router.get(

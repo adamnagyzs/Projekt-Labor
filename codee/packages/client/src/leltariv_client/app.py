@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -27,6 +28,9 @@ from PySide6.QtWidgets import (
 
 from leltariv_client.api import HttpApiClient
 from leltariv_client.worker import Worker
+
+#: hány sor jöjjön egy lapon. A szerver 100-ban maximálja.
+PAGE_SIZE = 50
 
 #: jobbra igazított oszlopok (mennyiség) — a darabszámok így olvashatók össze
 NUMERIC_COLUMNS = frozenset({5})
@@ -149,6 +153,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.api = api
         self.token = token
+        self.current_page = 1
         self.setWindowTitle("Leltárív Kliens")
         self.resize(1024, 768)
 
@@ -215,23 +220,51 @@ class MainWindow(QMainWindow):
         self.table = QTableView()
         self.model = AssetTableModel()
 
+        # A proxy csak rendez. Szűrni a szerver szűr, mert az a megnevezés mellett a
+        # kódokban is keres — a proxy viszont csak a megnevezés oszlopot látja, tehát
+        # egy leltárszámra keresve kidobná a szerver találatait.
         self.proxy_model = QSortFilterProxyModel()
         self.proxy_model.setSourceModel(self.model)
-        self.proxy_model.setFilterKeyColumn(2)
-        self.proxy_model.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
 
         self.table.setModel(self.proxy_model)
+        self.table.setSortingEnabled(True)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table)
 
+        footer = QHBoxLayout()
         self.status_label = QLabel("Adatok betöltése folyamatban...")
-        layout.addWidget(self.status_label)
+        self.prev_button = QPushButton("← Előző")
+        self.next_button = QPushButton("Következő →")
+        self.prev_button.clicked.connect(self.go_previous_page)
+        self.next_button.clicked.connect(self.go_next_page)
+        self.prev_button.setEnabled(False)
+        self.next_button.setEnabled(False)
+
+        footer.addWidget(self.status_label)
+        footer.addStretch()
+        footer.addWidget(self.prev_button)
+        footer.addWidget(self.next_button)
+        layout.addLayout(footer)
         return page
 
     def trigger_search(self):
-        self.status_label.setText("Adatok betöltése folyamatban...")
+        """Új keresés vagy körzetváltás: mindig az első oldalról indulunk."""
+        self.current_page = 1
+        self.load_page()
 
-        self.proxy_model.setFilterWildcard(f"*{self.search_input.text()}*")
+    def go_previous_page(self):
+        if self.current_page > 1:
+            self.current_page -= 1
+            self.load_page()
+
+    def go_next_page(self):
+        self.current_page += 1
+        self.load_page()
+
+    def load_page(self):
+        self.status_label.setText("Adatok betöltése folyamatban...")
+        self.prev_button.setEnabled(False)
+        self.next_button.setEnabled(False)
 
         zone = self.zone_combo.currentText()
         worker = Worker(
@@ -239,8 +272,8 @@ class MainWindow(QMainWindow):
             self.token,
             zone if zone != "Mind" else None,
             self.search_input.text(),
-            1,
-            50,
+            self.current_page,
+            PAGE_SIZE,
         )
         worker.signals.finished.connect(self.on_assets_loaded)
         worker.signals.error.connect(self.on_error)
@@ -259,13 +292,28 @@ class MainWindow(QMainWindow):
 
     def on_assets_loaded(self, page_data):
         self.model.update_data(page_data.items)
-        self.status_label.setText(
-            f"Megjelenítve: {len(page_data.items)} / {page_data.total} sor (Szerverről)"
-        )
+
+        shown = len(page_data.items)
+        total = page_data.total
+        last_page = max(1, math.ceil(total / page_data.page_size))
+
+        if total == 0:
+            self.status_label.setText("Nincs találat.")
+        else:
+            first_row = (page_data.page - 1) * page_data.page_size + 1
+            self.status_label.setText(
+                f"{first_row}–{first_row + shown - 1}. sor a(z) {total}-ből"
+                f"  ·  {page_data.page}. oldal / {last_page}"
+            )
+
+        self.prev_button.setEnabled(page_data.page > 1)
+        self.next_button.setEnabled(page_data.page < last_page)
 
     def on_error(self, err_msg):
         QMessageBox.critical(self, "Hiba", f"Hálózati hiba történt:\n{err_msg}")
         self.status_label.setText("Hiba az adatok betöltésekor.")
+        self.prev_button.setEnabled(self.current_page > 1)
+        self.next_button.setEnabled(True)
 
 
 def main():
