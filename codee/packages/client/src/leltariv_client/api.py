@@ -3,9 +3,13 @@ from datetime import date
 from typing import Protocol
 from uuid import uuid4
 
+import httpx
 from leltariv_contracts.assets import AssetListItem, AssetPage
 from leltariv_contracts.auth import LoginRequest, LoginResponse
 from leltariv_contracts.zones import ZoneOut
+
+API_PREFIX = "/api/v1"
+TIMEOUT_SECONDS = 10.0
 
 
 class ApiClient(Protocol):
@@ -14,6 +18,74 @@ class ApiClient(Protocol):
     def get_assets(
         self, token: str, zone: str | None, q: str | None, page: int, page_size: int
     ) -> AssetPage: ...
+
+
+class HttpApiClient:
+    """A valódi szerverrel beszélő kliens.
+
+    A válaszokat ugyanazokba a Pydantic modellekbe olvassuk be, amikkel a szerver
+    validál, tehát ha a szerződés megváltozik, az itt derül ki, nem a felületen.
+
+    Minden metódus `ValueError`-t dob a felhasználónak szánt üzenettel; a hívó
+    munkaszál ezt fogja meg és jeleníti meg. Hálózati kód nem kerül a UI szálra.
+    """
+
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+        self._client = httpx.Client(base_url=self.base_url, timeout=TIMEOUT_SECONDS)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        token: str | None = None,
+        json: dict[str, object] | None = None,
+        params: dict[str, str | int] | None = None,
+    ) -> object:
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+        try:
+            response = self._client.request(
+                method, f"{API_PREFIX}{path}", headers=headers, json=json, params=params
+            )
+        except httpx.RequestError as error:
+            raise ValueError(
+                f"A szerver nem érhető el ({self.base_url}). Fut a szerver?"
+            ) from error
+
+        if response.is_success:
+            return response.json()
+
+        # A FastAPI hibaválasza {"detail": "..."} — ha mégsem az jön, a státuszt mutatjuk.
+        try:
+            detail = response.json().get("detail")
+        except ValueError:
+            detail = None
+
+        raise ValueError(
+            str(detail) if detail else f"A szerver hibát adott: {response.status_code}"
+        )
+
+    def login(self, request: LoginRequest) -> LoginResponse:
+        payload = self._request("POST", "/auth/login", json=request.model_dump())
+        return LoginResponse.model_validate(payload)
+
+    def get_zones(self, token: str) -> list[ZoneOut]:
+        payload = self._request("GET", "/zones", token=token)
+        return [ZoneOut.model_validate(zone) for zone in payload]  # type: ignore[union-attr]
+
+    def get_assets(
+        self, token: str, zone: str | None, q: str | None, page: int, page_size: int
+    ) -> AssetPage:
+        params: dict[str, str | int] = {"page": page, "page_size": page_size}
+        if zone:
+            params["zone"] = zone
+        if q:
+            params["q"] = q
+
+        payload = self._request("GET", "/assets", token=token, params=params)
+        return AssetPage.model_validate(payload)
 
 
 class FakeApiClient:
