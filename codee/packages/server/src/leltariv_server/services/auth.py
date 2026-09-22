@@ -20,6 +20,24 @@ def get_auth_mode() -> str:
     return os.environ.get("AUTH_MODE", "local")
 
 
+def required_env(name: str) -> str:
+    """Kötelező szerverbeállítás, érthető hibaüzenettel.
+
+    Közvetlen `os.environ[...]` helyett: hiányzó kulcsnál az KeyError-t dobna, amiből a
+    kliens egy nyers 500-at lát, és a hibakeresés a bemutató közepén kezdődik.
+    """
+    value = os.environ.get(name)
+    if not value:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Hiányzó szerverbeállítás: {name}. "
+                "Másold a .env.example fájlt .env néven, és töltsd ki."
+            ),
+        )
+    return value
+
+
 def get_current_user(
     authorization: str | None,
     session: Session,
@@ -36,7 +54,7 @@ def get_current_user(
     try:
         payload = jwt.decode(  # type: ignore[reportUnknownMemberType]
             token,
-            os.environ["JWT_SECRET"],
+            required_env("JWT_SECRET"),
             algorithms=[JWT_ALGORITHM],
         )
         user_id = UUID(payload["sub"])
@@ -45,6 +63,14 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Érvénytelen vagy lejárt token.",
         ) from error
+
+    # A frissítő token ugyanazzal a titokkal készül, tehát önmagában érvényes aláírású.
+    # Ha nem zárnánk ki, egy hosszú életű refresh tokennel is lehetne kéréseket küldeni.
+    if payload.get("type") == "refresh":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Frissítő tokennel nem lehet kérést hitelesíteni.",
+        )
 
     user = session.scalar(select(AppUser).where(AppUser.id == user_id))
     if user is None or not user.is_active:
@@ -57,15 +83,26 @@ def get_current_user(
 
 
 def local_login(email: str, password: str, session: Session) -> tuple[str, str, AppUser]:
-    """Lokális demólogin a .env-ben rögzített felhasználóval."""
+    """Lokális demólogin a .env-ben rögzített felhasználóval.
+
+    Tudatosan ideiglenes megoldás, és a védésen így is kell elmondani. A jelszót itt
+    nem az adatbázis tárolja hashelve, hanem a `.env` nyílt szövegként, mert az
+    `app_user` táblának ebben a mérföldkőben még nincs e-mail és jelszóhash oszlopa.
+    Egyetlen demófelhasználó van, és az ADMIN szerepkörű seed-felhasználóra képződik le.
+
+    A következő mérföldkő két lépése: az `app_user` kiegészítése e-maillel és bcrypt
+    jelszóhashsel (a `passlib` már a függőségek között van), majd átállás GoTrue-ra
+    `AUTH_MODE=gotrue` mellett. A kliens felé egyik sem látszik: a `LoginResponse`
+    formátuma mindhárom esetben ugyanaz.
+    """
     if get_auth_mode() != "local":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A local hitelesítés nincs engedélyezve.",
         )
 
-    demo_email = os.environ["DEMO_USER_EMAIL"]
-    demo_password = os.environ["DEMO_USER_PASSWORD"]
+    demo_email = required_env("DEMO_USER_EMAIL")
+    demo_password = required_env("DEMO_USER_PASSWORD")
 
     if email != demo_email or password != demo_password:
         raise HTTPException(
@@ -96,7 +133,7 @@ def local_login(email: str, password: str, session: Session) -> tuple[str, str, 
 
     access_token = jwt.encode(  # type: ignore[reportUnknownMemberType]
         payload,
-        os.environ["JWT_SECRET"],
+        required_env("JWT_SECRET"),
         algorithm=JWT_ALGORITHM,
     )
     refresh_token = jwt.encode(  # type: ignore[reportUnknownMemberType]
@@ -106,7 +143,7 @@ def local_login(email: str, password: str, session: Session) -> tuple[str, str, 
             "iat": now,
             "exp": now + timedelta(days=7),
         },
-        os.environ["JWT_SECRET"],
+        required_env("JWT_SECRET"),
         algorithm=JWT_ALGORITHM,
     )
 
