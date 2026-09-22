@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -350,6 +351,21 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
     return rows_read, rows_ok, rows_failed
 
 
+def get_source_dir() -> Path:
+    """A forrásfájlok mappája.
+
+    A `SOURCE_XLSX_DIR` környezeti változóból jön, mert a két XLSX nincs a repóban —
+    személyes adat van a metaadatában —, tehát minden gépen máshol áll. Ha nincs
+    beállítva, a repó `source-data` mappájába nézünk.
+    """
+    configured = os.environ.get("SOURCE_XLSX_DIR")
+
+    if configured:
+        return Path(configured)
+
+    return Path(__file__).resolve().parent.parent / "source-data"
+
+
 def source_paths(source_dir: Path) -> list[Path]:
     """A két kötelező XLSX forrásfájl ellenőrzött elérési útja."""
     paths: list[Path] = []
@@ -358,7 +374,11 @@ def source_paths(source_dir: Path) -> list[Path]:
         path = source_dir / file_name
 
         if not path.is_file():
-            raise FileNotFoundError(f"Hiányzó forrásfájl: {path}")
+            raise FileNotFoundError(
+                f"Hiányzó forrásfájl: {path}\n"
+                "Állítsd be a SOURCE_XLSX_DIR értékét a .env-ben arra a mappára, "
+                "ahol a két XLSX van."
+            )
 
         paths.append(path)
 
@@ -367,7 +387,7 @@ def source_paths(source_dir: Path) -> list[Path]:
 
 def main() -> None:
     """A teljes fejlesztői seed futtatása."""
-    source_dir = Path("/Users/ederdaniel/Projekt-Labor/codee/source-data")
+    source_dir = get_source_dir()
 
     session = SessionLocal()
 

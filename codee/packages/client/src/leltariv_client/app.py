@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from leltariv_client.api import FakeApiClient
+from leltariv_client.api import HttpApiClient
 from leltariv_client.worker import Worker
 
 #: jobbra igazított oszlopok (mennyiség) — a darabszámok így olvashatók össze
@@ -275,7 +275,7 @@ def main():
     dialog = LoginDialog()
     if dialog.exec() == QDialog.DialogCode.Accepted:
         dialog.save_config()
-        api = FakeApiClient(dialog.url_input.text())
+        api = HttpApiClient(dialog.url_input.text())
 
         req = LoginRequest(email=dialog.email_input.text(), password=dialog.pwd_input.text())
         try:
