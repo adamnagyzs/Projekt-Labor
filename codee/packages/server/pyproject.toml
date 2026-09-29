@@ -7,18 +7,20 @@ dependencies = [
     "leltariv-contracts",
     "leltariv-application",
     "leltariv-infrastructure",
+    "leltariv-domain",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pyjwt>=2.9",
-    "passlib[bcrypt]>=1.7",
     "httpx>=0.27",
     "pydantic-settings>=2.5",
+    "python-dotenv>=1.0",
 ]
 
 [tool.uv.sources]
 leltariv-contracts = { workspace = true }
 leltariv-application = { workspace = true }
 leltariv-infrastructure = { workspace = true }
+leltariv-domain = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
