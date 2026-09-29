@@ -30,3 +30,19 @@ class AssetPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class AssetDetail(BaseModel):
+    """Egy eszköz adatlapja: a kódjai és, ha főeszköz, a tartozékai."""
+
+    id: UUID
+    asset_number: str
+    sub_number: int
+    name: str
+    zone_code: str
+    quantity: int
+    activated_on: date | None = None
+    serial_number: str | None = None
+    asset_type: str | None = None
+    codes: list[AssetCodeOut]
+    accessories: list[AssetListItem]
