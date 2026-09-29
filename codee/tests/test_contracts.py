@@ -1,8 +1,10 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from uuid import uuid4
 
-from leltariv_contracts import AssetPage, LoginResponse
-from leltariv_contracts.assets import AssetListItem
+import pytest
+from leltariv_contracts import AssetDetail, AssetPage, LoginResponse, ScanCreate, ScanOut
+from leltariv_contracts.assets import AssetCodeOut, AssetListItem
+from pydantic import ValidationError
 
 
 def test_asset_page_roundtrip() -> None:
@@ -56,3 +58,40 @@ def test_role_is_constrained() -> None:
         access_token="x", refresh_token="y", role="LELTAROZO", display_name="Teszt"
     )
     assert resp.role == "LELTAROZO"
+
+
+def test_asset_detail_roundtrip() -> None:
+    accessory = AssetListItem(
+        id=uuid4(), asset_number="3021345", sub_number=1, name="MONITOR", zone_code="262"
+    )
+    detail = AssetDetail(
+        id=uuid4(),
+        asset_number="3021345",
+        sub_number=0,
+        name="SZÁMÍTÓGÉP",
+        zone_code="262",
+        quantity=1,
+        codes=[AssetCodeOut(code="024540", code_type="LELTARSZAM", is_primary=True)],
+        accessories=[accessory],
+    )
+    parsed = AssetDetail.model_validate_json(detail.model_dump_json())
+    assert parsed.codes[0].code == "024540"
+    assert parsed.accessories[0].sub_number == 1
+
+
+def test_scan_out_roundtrip_without_asset() -> None:
+    scan = ScanOut(
+        id=uuid4(),
+        raw_code="X123",
+        result="UNKNOWN_CODE",
+        scanned_at=datetime.now(UTC),
+        message="Ismeretlen kód: X123. Rögzítettük, de nem tartozik hozzá eszköz.",
+    )
+    parsed = ScanOut.model_validate_json(scan.model_dump_json())
+    assert parsed.asset is None
+    assert parsed.result == "UNKNOWN_CODE"
+
+
+def test_empty_scan_code_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ScanCreate(raw_code="")

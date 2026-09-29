@@ -91,7 +91,8 @@ def local_login(email: str, password: str, session: Session) -> tuple[str, str, 
     Egyetlen demófelhasználó van, és az ADMIN szerepkörű seed-felhasználóra képződik le.
 
     A következő mérföldkő két lépése: az `app_user` kiegészítése e-maillel és bcrypt
-    jelszóhashsel (a `passlib` már a függőségek között van), majd átállás GoTrue-ra
+    jelszóhashsel (a `bcrypt` csomaggal közvetlenül: a `passlib` a bcrypt 5-tel már el sem
+    indul), majd átállás GoTrue-ra
     `AUTH_MODE=gotrue` mellett. A kliens felé egyik sem látszik: a `LoginResponse`
     formátuma mindhárom esetben ugyanaz.
     """
