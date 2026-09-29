@@ -22,7 +22,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-leltar2026}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Csak localhost: a Wi-Fi-ről / hálózatról ne legyen elérhető az adatbázis.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
@@ -42,7 +43,8 @@ services:
       PGADMIN_CONFIG_SERVER_MODE: "False"
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
     ports:
-      - "${PGADMIN_PORT:-5050}:80"
+      # Csak localhost: desktop módban a pgAdmin nem kér belépést.
+      - "127.0.0.1:${PGADMIN_PORT:-5050}:80"
     depends_on:
       db:
         condition: service_healthy
