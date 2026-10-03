@@ -70,8 +70,8 @@ def is_asset_row(row: tuple[object, ...]) -> bool:
     return len(row) > 1 and row[1] not in (None, "")
 
 
-def read_asset_rows(path: Path) -> Iterator[dict[str, object]]:
-    """XLSX-ből csak valódi eszközsorokat ad vissza, fejlécnév szerinti dictként."""
+def read_asset_rows(path: Path) -> Iterator[tuple[int, dict[str, object]]]:
+    """XLSX-ből valódi eszközsorokat ad vissza (Excel-sorszám, fejlécnév szerinti dict) párként."""
     workbook = load_workbook(path, read_only=True, data_only=True)
     worksheet = workbook.active
 
@@ -88,10 +88,13 @@ def read_asset_rows(path: Path) -> Iterator[dict[str, object]]:
 
         headers = [clean_header(header) for header in raw_headers]
 
-        for row in row_iterator:
+        for row_number, row in enumerate(row_iterator, start=2):
             if not is_asset_row(row):
                 continue
 
-            yield {header: value for header, value in zip(headers, row, strict=False) if header}
+            values: dict[str, object] = {
+                header: value for header, value in zip(headers, row, strict=False) if header
+            }
+            yield row_number, values
     finally:
         workbook.close()
