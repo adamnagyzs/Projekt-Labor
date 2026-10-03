@@ -274,7 +274,7 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
     rows_read = 0
     rows_ok = 0
     rows_failed = 0
-
+    errors: list[tuple[int, str]] = []
     batch = ImportBatch(
         id=uuid4(),
         file_name=path.name,
@@ -286,68 +286,76 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
     )
     session.add(batch)
     session.flush()
-
-    for row in read_asset_rows(path):
+    
+    for row_number, row in read_asset_rows(path):
         rows_read += 1
 
         try:
-            seed_asset = row_to_seed_asset(row)
-            zone = get_or_create_zone(session, seed_asset.zone_code)
-            asset_type = get_or_create_asset_type(
-                session,
-                name=seed_asset.name,
-                name_normalized=seed_asset.name_normalized,
-            )
-
-            existing_asset = session.scalar(
-                select(Asset).where(
-                    Asset.asset_number == seed_asset.asset_number,
-                    Asset.sub_number == seed_asset.sub_number,
-                )
-            )
-            if existing_asset is not None:
-                raise ValueError(
-                    f"Duplikált eszköz-kulcs: {seed_asset.asset_number}/{seed_asset.sub_number}"
+            with session.begin_nested():
+                seed_asset = row_to_seed_asset(row)
+                zone = get_or_create_zone(session, seed_asset.zone_code)
+                asset_type = get_or_create_asset_type(
+                    session,
+                    name=seed_asset.name,
+                    name_normalized=seed_asset.name_normalized,
                 )
 
-            asset = Asset(
-                id=uuid4(),
-                asset_number=seed_asset.asset_number,
-                sub_number=seed_asset.sub_number,
-                name=seed_asset.name,
-                name_normalized=seed_asset.name_normalized,
-                zone_id=zone.id,
-                asset_type_id=asset_type.id,
-                parent_asset_id=None,
-                original_asset=seed_asset.original_asset,
-                tax_ref=seed_asset.tax_ref,
-                activated_on=seed_asset.activated_on,
-                gross_value=seed_asset.gross_value,
-                accum_depreciation=seed_asset.accum_depreciation,
-                book_value=seed_asset.book_value,
-                currency=seed_asset.currency,
-                serial_number=seed_asset.serial_number,
-                quantity=seed_asset.quantity,
-                import_batch_id=batch.id,
-            )
-            session.add(asset)
-            session.flush()
+                existing_asset = session.scalar(
+                    select(Asset).where(
+                        Asset.asset_number == seed_asset.asset_number,
+                        Asset.sub_number == seed_asset.sub_number,
+                    )
+                )
+                if existing_asset is not None:
+                    raise ValueError(
+                        f"Duplikált eszköz-kulcs: "
+                        f"{seed_asset.asset_number}/{seed_asset.sub_number}"
+                    )
 
-            create_asset_codes(
-                session,
-                asset=asset,
-                zone=zone,
-                seed_asset=seed_asset,
-            )
+                asset = Asset(
+                    id=uuid4(),
+                    asset_number=seed_asset.asset_number,
+                    sub_number=seed_asset.sub_number,
+                    name=seed_asset.name,
+                    name_normalized=seed_asset.name_normalized,
+                    zone_id=zone.id,
+                    asset_type_id=asset_type.id,
+                    parent_asset_id=None,
+                    original_asset=seed_asset.original_asset,
+                    tax_ref=seed_asset.tax_ref,
+                    activated_on=seed_asset.activated_on,
+                    gross_value=seed_asset.gross_value,
+                    accum_depreciation=seed_asset.accum_depreciation,
+                    book_value=seed_asset.book_value,
+                    currency=seed_asset.currency,
+                    serial_number=seed_asset.serial_number,
+                    quantity=seed_asset.quantity,
+                    import_batch_id=batch.id,
+                )
+                session.add(asset)
+                session.flush()
+
+                create_asset_codes(
+                    session,
+                    asset=asset,
+                    zone=zone,
+                    seed_asset=seed_asset,
+                )
+
             rows_ok += 1
-        except (IntegrityError, TypeError, ValueError):
+
+        except (IntegrityError, TypeError, ValueError) as error:
             rows_failed += 1
-            raise
+            errors.append((row_number, str(error)))
 
     batch.rows_read = rows_read
     batch.rows_ok = rows_ok
     batch.rows_failed = rows_failed
 
+    if errors:
+        print(f"\n{path.name}: {len(errors)} hibás sor.")
+        for row_number, message in errors[:20]:
+            print(f"Sor {row_number}: {message}")
     return rows_read, rows_ok, rows_failed
 
 
