@@ -24,9 +24,10 @@ from PySide6.QtWidgets import (
     QTableView,
     QVBoxLayout,
     QWidget,
+    QCheckBox
 )
 
-from leltariv_client.api import HttpApiClient
+from leltariv_client.api import HttpApiClient, FakeApiClient
 from leltariv_client.worker import Worker
 
 #: hány sor jöjjön egy lapon. A szerver 100-ban maximálja.
@@ -213,7 +214,14 @@ class MainWindow(QMainWindow):
         self.zone_combo.addItem("Mind")
         self.zone_combo.currentTextChanged.connect(self.trigger_search)
 
+        self.main_only_cb = QCheckBox("Csak főeszközök")
+        self.multi_only_cb = QCheckBox("Csak többdarabos")
+        self.main_only_cb.toggled.connect(self.trigger_search)
+        self.multi_only_cb.toggled.connect(self.trigger_search)
+
         filter_layout.addWidget(self.zone_combo)
+        filter_layout.addWidget(self.main_only_cb)
+        filter_layout.addWidget(self.multi_only_cb)
         filter_layout.addWidget(self.search_input)
         layout.addLayout(filter_layout)
 
@@ -245,12 +253,36 @@ class MainWindow(QMainWindow):
         footer.addWidget(self.prev_button)
         footer.addWidget(self.next_button)
         layout.addLayout(footer)
+
+        self.table.doubleClicked.connect(self.on_row_double_clicked)
         return page
 
     def trigger_search(self):
-        """Új keresés vagy körzetváltás: mindig az első oldalról indulunk."""
-        self.current_page = 1
-        self.load_page()
+        self.proxy_model.setFilterWildcard(f"*{self.search_input.text()}*")
+        zone = self.zone_combo.currentText()
+        
+        # Paraméterek bekötése (az 1. oldalra ugrik)
+        worker = Worker(
+            self.api.get_assets, 
+            self.token, 
+            zone if zone != "Mind" else None, 
+            self.search_input.text(), 
+            1, 
+            50, 
+            self.main_only_cb.isChecked(), 
+            self.multi_only_cb.isChecked()
+        )
+        worker.signals.finished.connect(self.on_assets_loaded)
+        worker.signals.error.connect(self.on_error)
+        QThreadPool.globalInstance().start(worker)
+
+    def on_row_double_clicked(self, index):
+        source_index = self.proxy_model.mapToSource(index)
+        item = self.model._data[source_index.row()]
+        
+        from leltariv_client.dialogs import AssetDetailDialog
+        dialog = AssetDetailDialog(self.api, self.token, item.id, self)
+        dialog.exec()
 
     def go_previous_page(self):
         if self.current_page > 1:
