@@ -2,8 +2,6 @@ from datetime import date, datetime
 from pathlib import Path
 
 import pytest
-from openpyxl import Workbook
-
 from leltariv_domain.xlsx_import import (
     as_source_text,
     clean_header,
@@ -12,6 +10,7 @@ from leltariv_domain.xlsx_import import (
     read_asset_rows,
     zone_code_from_site,
 )
+from openpyxl import Workbook
 
 
 def test_clean_header_removes_leading_and_trailing_spaces() -> None:

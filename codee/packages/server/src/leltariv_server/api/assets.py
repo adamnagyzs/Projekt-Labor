@@ -73,7 +73,7 @@ def list_assets(
         default=None,
         description="A körzet kódja, például: 261. Üresen hagyva mindegyik körzet.",
     ),
-       q: str | None = Query(default=None, description="Szabad szöveges keresőkifejezés."),
+    q: str | None = Query(default=None, description="Szabad szöveges keresőkifejezés."),
     main_only: bool = Query(
         default=False,
         description="Csak főeszközök, vagyis alszám 0.",
@@ -151,14 +151,12 @@ def list_assets(
 
     # Az elsődleges leltárszámokat egyetlen lekérdezéssel szedjük össze a laphoz.
     # Eszközönként külön lekérdezve egy 50-es lap 51 kört jelentene az adatbázishoz.
-    
-    
+
     asset_ids = [asset.id for asset, _ in rows]
     primary_codes = primary_inventory_numbers(session, asset_ids)
 
     items = [
-    asset_list_item(asset, asset_zone_code, primary_codes)
-    for asset, asset_zone_code in rows
+        asset_list_item(asset, asset_zone_code, primary_codes) for asset, asset_zone_code in rows
     ]
 
     return AssetPage(
@@ -167,6 +165,8 @@ def list_assets(
         page=page,
         page_size=page_size,
     )
+
+
 @router.get(
     "/assets/{asset_id}",
     response_model=AssetDetail,
@@ -192,11 +192,15 @@ def get_asset(
 
     asset, zone_code, asset_type_name = row
 
-    code_rows = session.execute(
-        select(AssetCode)
-        .where(AssetCode.asset_id == asset.id)
-        .order_by(AssetCode.is_primary.desc(), AssetCode.code_type, AssetCode.code)
-    ).scalars().all()
+    code_rows = (
+        session.execute(
+            select(AssetCode)
+            .where(AssetCode.asset_id == asset.id)
+            .order_by(AssetCode.is_primary.desc(), AssetCode.code_type, AssetCode.code)
+        )
+        .scalars()
+        .all()
+    )
 
     codes = [
         AssetCodeOut(
