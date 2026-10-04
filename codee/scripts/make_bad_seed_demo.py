@@ -2,7 +2,6 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
-
 output = Path("bad-seed-demo.xlsx")
 
 workbook = Workbook()

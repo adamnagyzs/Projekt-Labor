@@ -286,7 +286,7 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
     )
     session.add(batch)
     session.flush()
-    
+
     for row_number, row in read_asset_rows(path):
         rows_read += 1
 
@@ -308,8 +308,7 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
                 )
                 if existing_asset is not None:
                     raise ValueError(
-                        f"Duplikált eszköz-kulcs: "
-                        f"{seed_asset.asset_number}/{seed_asset.sub_number}"
+                        f"Duplikált eszköz-kulcs: {seed_asset.asset_number}/{seed_asset.sub_number}"
                     )
 
                 asset = Asset(
