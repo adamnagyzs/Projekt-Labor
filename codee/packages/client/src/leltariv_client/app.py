@@ -345,19 +345,24 @@ def main():
     app = QApplication(sys.argv)
     qdarktheme.setup_theme("auto")
 
+    # Hibás belépés után az ablak visszajön (cím és e-mail marad, a jelszó törlődik);
+    # csak a Mégse lép ki. Különben egy elgépelt jelszó az indítóval a szervert is leállítaná.
     dialog = LoginDialog()
-    if dialog.exec() == QDialog.DialogCode.Accepted:
+    while dialog.exec() == QDialog.DialogCode.Accepted:
         dialog.save_config()
         api = HttpApiClient(dialog.url_input.text())
-
-        req = LoginRequest(email=dialog.email_input.text(), password=dialog.pwd_input.text())
         try:
+            req = LoginRequest(email=dialog.email_input.text(), password=dialog.pwd_input.text())
             resp = api.login(req)
-            window = MainWindow(api, resp.access_token, resp.display_name, resp.role)
-            window.show()
-            sys.exit(app.exec())
         except Exception as e:
-            QMessageBox.critical(None, "Belépési hiba", str(e))
+            QMessageBox.critical(dialog, "Belépési hiba", str(e))
+            dialog.pwd_input.clear()
+            dialog.pwd_input.setFocus()
+            continue
+
+        window = MainWindow(api, resp.access_token, resp.display_name, resp.role)
+        window.show()
+        sys.exit(app.exec())
 
 
 if __name__ == "__main__":
