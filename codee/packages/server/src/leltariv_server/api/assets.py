@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,6 +19,9 @@ from sqlalchemy.sql.elements import ColumnElement
 from leltariv_server.dependencies import require_current_user
 
 router = APIRouter(prefix="/api/v1", tags=["assets"])
+
+#: hol keressen a `q`: mindenhol, csak a megnevezésben, vagy csak egy kódtípusban
+SearchField = Literal["mind", "nev", "LELTARSZAM", "ESZKOZSZAM", "GYARI_SZAM"]
 
 
 def primary_inventory_numbers(
@@ -74,6 +77,7 @@ def list_assets(
         description="A körzet kódja, például: 261. Üresen hagyva mindegyik körzet.",
     ),
     q: str | None = Query(default=None, description="Szabad szöveges keresőkifejezés."),
+    field: SearchField = "mind",
     main_only: bool = Query(
         default=False,
         description="Csak főeszközök, vagyis alszám 0.",
@@ -125,15 +129,13 @@ def list_assets(
         ]
         if zone_id is not None:
             code_filters.append(AssetCode.zone_id == zone_id)
+        if field not in ("mind", "nev"):
+            code_filters.append(AssetCode.code_type == field)
 
         matching_asset_ids = select(AssetCode.asset_id).where(*code_filters)
-
-        filters.append(
-            or_(
-                Asset.name_normalized.contains(normalized_query),
-                Asset.id.in_(matching_asset_ids),
-            )
-        )
+        by_name = Asset.name_normalized.contains(normalized_query)
+        by_code = Asset.id.in_(matching_asset_ids)
+        filters.append({"mind": or_(by_name, by_code), "nev": by_name}.get(field, by_code))
 
     base_query = select(Asset).where(*filters)
     total = session.scalar(select(func.count()).select_from(base_query.subquery())) or 0

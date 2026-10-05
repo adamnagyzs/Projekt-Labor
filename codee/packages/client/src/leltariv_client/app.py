@@ -216,8 +216,20 @@ class MainWindow(QMainWindow):
 
         filter_layout = QHBoxLayout()
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Keresés név alapján...")
+        self.search_input.setPlaceholderText("Keresés...")
         self.search_input.textChanged.connect(self.trigger_search)
+
+        # Hol keressen a kereső; az adat a szerver `field` paramétere.
+        self.search_field = QComboBox()
+        for label, value in (
+            ("Mindenhol", "mind"),
+            ("Megnevezés", "nev"),
+            ("Leltárszám", "LELTARSZAM"),
+            ("Eszközszám", "ESZKOZSZAM"),
+            ("Gyári szám", "GYARI_SZAM"),
+        ):
+            self.search_field.addItem(label, value)
+        self.search_field.currentIndexChanged.connect(self.trigger_search)
 
         self.zone_combo = QComboBox()
         self.zone_combo.addItem("Mind")
@@ -231,6 +243,7 @@ class MainWindow(QMainWindow):
         filter_layout.addWidget(self.zone_combo)
         filter_layout.addWidget(self.main_only_cb)
         filter_layout.addWidget(self.multi_only_cb)
+        filter_layout.addWidget(self.search_field)
         filter_layout.addWidget(self.search_input)
         layout.addLayout(filter_layout)
 
@@ -299,9 +312,11 @@ class MainWindow(QMainWindow):
             PAGE_SIZE,
             self.main_only_cb.isChecked(),
             self.multi_only_cb.isChecked(),
+            self.search_field.currentData(),
         )
         worker.signals.finished.connect(self.on_assets_loaded)
         worker.signals.error.connect(self.on_error)
+        self.latest_load = worker.signals
         QThreadPool.globalInstance().start(worker)
 
     def load_zones(self):
@@ -316,6 +331,10 @@ class MainWindow(QMainWindow):
         self.trigger_search()
 
     def on_assets_loaded(self, page_data):
+        # Gépelés vagy szűrőváltás közben több kérés is úton lehet, és nem sorrendben
+        # érnek vissza: csak a legutoljára elküldött válaszát mutatjuk.
+        if self.sender() is not self.latest_load:
+            return
         self.model.update_data(page_data.items)
 
         shown = len(page_data.items)

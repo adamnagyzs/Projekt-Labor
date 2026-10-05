@@ -25,6 +25,7 @@ class ApiClient(Protocol):
         page_size: int,
         main_only: bool = False,
         multi_only: bool = False,
+        field: str = "mind",
     ) -> AssetPage: ...
     def get_asset(self, token: str, asset_id: UUID) -> AssetDetail: ...
     def start_session(self, token: str, zone_code: str) -> SessionOut: ...
@@ -95,6 +96,7 @@ class HttpApiClient:
         page_size: int,
         main_only: bool = False,
         multi_only: bool = False,
+        field: str = "mind",
     ) -> AssetPage:
         params: dict[str, str | int] = {"page": page, "page_size": page_size}
         if zone:
@@ -106,6 +108,8 @@ class HttpApiClient:
             params["main_only"] = "true"
         if multi_only:
             params["multi_only"] = "true"
+        if field != "mind":
+            params["field"] = field
 
         payload = self._request("GET", "/assets", token=token, params=params)
         return AssetPage.model_validate(payload)
@@ -208,6 +212,7 @@ class FakeApiClient:
         page_size: int,
         main_only: bool = False,
         multi_only: bool = False,
+        field: str = "mind",
     ) -> AssetPage:
         time.sleep(0.5)
         items = FAKE_ASSETS
