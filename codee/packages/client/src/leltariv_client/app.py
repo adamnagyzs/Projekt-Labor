@@ -10,6 +10,7 @@ from PySide6.QtCore import QAbstractTableModel, QSortFilterProxyModel, Qt, QThre
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -24,10 +25,10 @@ from PySide6.QtWidgets import (
     QTableView,
     QVBoxLayout,
     QWidget,
-    QCheckBox
 )
 
-from leltariv_client.api import HttpApiClient, FakeApiClient
+from leltariv_client.api import HttpApiClient
+from leltariv_client.dialogs import AssetDetailDialog
 from leltariv_client.worker import Worker
 
 #: hány sor jöjjön egy lapon. A szerver 100-ban maximálja.
@@ -101,6 +102,9 @@ class AssetTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             return self.headers[section]
         return None
+
+    def item_at(self, row: int):
+        return self._data[row]
 
     def update_data(self, new_data):
         self.beginResetModel()
@@ -258,31 +262,13 @@ class MainWindow(QMainWindow):
         return page
 
     def trigger_search(self):
-        self.proxy_model.setFilterWildcard(f"*{self.search_input.text()}*")
-        zone = self.zone_combo.currentText()
-        
-        # Paraméterek bekötése (az 1. oldalra ugrik)
-        worker = Worker(
-            self.api.get_assets, 
-            self.token, 
-            zone if zone != "Mind" else None, 
-            self.search_input.text(), 
-            1, 
-            50, 
-            self.main_only_cb.isChecked(), 
-            self.multi_only_cb.isChecked()
-        )
-        worker.signals.finished.connect(self.on_assets_loaded)
-        worker.signals.error.connect(self.on_error)
-        QThreadPool.globalInstance().start(worker)
+        """Új keresés, körzet- vagy szűrőváltás: mindig az első oldalról indulunk."""
+        self.current_page = 1
+        self.load_page()
 
     def on_row_double_clicked(self, index):
-        source_index = self.proxy_model.mapToSource(index)
-        item = self.model._data[source_index.row()]
-        
-        from leltariv_client.dialogs import AssetDetailDialog
-        dialog = AssetDetailDialog(self.api, self.token, item.id, self)
-        dialog.exec()
+        item = self.model.item_at(self.proxy_model.mapToSource(index).row())
+        AssetDetailDialog(self.api, self.token, item.id, self).exec()
 
     def go_previous_page(self):
         if self.current_page > 1:
@@ -306,6 +292,8 @@ class MainWindow(QMainWindow):
             self.search_input.text(),
             self.current_page,
             PAGE_SIZE,
+            self.main_only_cb.isChecked(),
+            self.multi_only_cb.isChecked(),
         )
         worker.signals.finished.connect(self.on_assets_loaded)
         worker.signals.error.connect(self.on_error)
