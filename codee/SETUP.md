@@ -1,45 +1,161 @@
-# A váz — mi van kész, és mi hiányzik még
+# Telepítés és indítás
 
-Ez a mappa a Leltárív workspace-váza: a hat csomag, a közös adatszerződések, a lint- és
-típusellenőrző-konfiguráció, és a tesztek. Erre épít Dani (adatbázis, szerver) és Ádám (kliens).
+Friss gépen kb. 3 perc, utána egy paranccsal indul az egész: adatbázis, szerver, kliens. Minden
+parancs a `codee` mappából fut. A lépéseket 2026. október 5-én tiszta klónon végigpróbáltuk.
 
-## Kész
+## 1. Ami kell hozzá (egyszer)
 
-```
-codee/
-├── pyproject.toml          uv workspace, ruff, pyright strict, pytest
-├── .gitignore              a két XLSX és a .env ki van zárva
-├── .env.example            a portkiosztással és a demó felhasználóval
-├── packages/
-│   ├── contracts/          a nyolc Pydantic modell — EZ A SZERZŐDÉS
-│   ├── domain/             üres, külső függőség nélkül
-│   ├── application/
-│   ├── infrastructure/     Danié
-│   ├── server/             Danié
-│   └── client/             Ádámé
-└── tests/test_contracts.py három teszt, hogy a CI-nak legyen mit futtatnia
+| Mi | Miért | Honnan |
+|---|---|---|
+| Git | a repó letöltéséhez | <https://git-scm.com> |
+| uv | ez hozza a Python 3.12-t és minden csomagot, Pythont külön nem kell telepíteni | lent |
+| Rancher Desktop | ebben fut a PostgreSQL | <https://rancherdesktop.io> |
+
+Az uv telepítése (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-## Az adatbázis — 1. fázis (ez van most)
+A Rancher Desktopban a **Preferences → Container Engine** legyen **dockerd (moby)**, különben a
+`docker compose` parancs nem működik. Indításkor legyen bekapcsolva; az első indulása eltart egy
+darabig, ezt érdemes előre megvárni.
 
-`docker-compose.yml`: PostgreSQL 17 + pgAdmin. Külső fájl nem kell hozzá, azonnal indul.
+## 2. Első telepítés
+
+```bash
+git clone https://github.com/adamnagyzs/Projekt-Labor.git
+```
+
+```bash
+cd Projekt-Labor/codee
+```
+
+A beállítások a mintából (PowerShellben `copy .env.example .env`):
+
+```bash
+cp .env.example .env
+```
+
+A két forrásfájlt (`261 lista_20260909.XLSX`, `262 lista_20260909.XLSX`, pontosan ezzel a névvel)
+másold a `codee/source-data` mappába; ha nincs ilyen mappa, hozd létre. Ezek nincsenek a repóban,
+mert a metaadatukban személyes adat van, és a `.gitignore` minden xlsx-et kizár. Ha máshol vannak,
+a `.env`-ben a `SOURCE_XLSX_DIR` sorba írd a mappájukat.
+
+Csomagok (kb. 1 perc első alkalommal):
+
+```bash
+uv sync --frozen
+```
+
+Adatbázis (első alkalommal letölti a két képet, kb. 350 MB):
 
 ```bash
 docker compose up -d
 ```
 
-Ezen fut a migráció, a seed és a szerver `AUTH_MODE=local` mellett. A séma a pgAdminban
-megnézhető és megmutatható: `http://localhost:5050`, a belépés a `.env`-ben lévő
-`PGADMIN_EMAIL` / `PGADMIN_PASSWORD` párral. A szerverhez a kapcsolat:
-host `leltariv-db`, port `5432`.
+Séma:
 
-| Port | Mi |
+```bash
+uv run alembic upgrade head
+```
+
+Az adatok betöltése (kb. 30 másodperc):
+
+```bash
+uv run python scripts/seed.py
+```
+
+A végén ezt kell kiírnia: `Seed kész: 3620/3620 eszköz, 0 hibás sor, 763 tartozék a főeszközéhez kötve.`
+
+## 3. Indítás (minden alkalommal)
+
+```bash
+uv run python scripts/start.py
+```
+
+Ez elindítja a konténereket, a szervert, megvárja, hogy válaszoljon, majd megnyitja a klienst. A
+kliens ablakának bezárásával a szerver is leáll. Ugyanezt csinálja a `Leltariv.exe`, ami dupla
+kattintással indul; ez nincs a repóban, de egy paranccsal elkészül a `dist` mappába:
+
+```bash
+uv run --with pyinstaller pyinstaller --onefile --name Leltariv scripts/start.py
+```
+
+A bejelentkező ablakba:
+
+| Mező | Érték |
 |---|---|
-| 8000 | FastAPI |
-| 5432 | PostgreSQL |
-| 5050 | pgAdmin |
+| Szerver címe | `http://127.0.0.1:8000` (nem `localhost`, lásd a 6. pontot) |
+| E-mail | a `.env` `DEMO_USER_EMAIL` sora, alapból `admin@leltariv.local` |
+| Jelszó | a `.env` `DEMO_USER_PASSWORD` sora |
 
-## Az adatbázis — 2. fázis: a Supabase-stack
+Elgépelt jelszó után az ablak visszajön, újra lehet próbálni. A kliens megjegyzi a címet és az
+e-mailt, a jelszót nem.
+
+Indító nélkül, két külön ablakban:
+
+```bash
+uv run uvicorn leltariv_server.main:app --host 127.0.0.1 --port 8000
+```
+
+```bash
+uv run python -m leltariv_client.app
+```
+
+## 4. Címek és portok
+
+| Cím | Mi |
+|---|---|
+| <http://127.0.0.1:8000/docs> | a szerver Swagger-felülete, itt minden végpont kipróbálható |
+| <http://127.0.0.1:8000/health> | `{"status":"ok","database":"ok"}`, ha a szerver és az adatbázis is él |
+| <http://127.0.0.1:5050> | pgAdmin; az adatbázishoz a host `leltariv-db`, port `5432`, a jelszó a `.env` `POSTGRES_PASSWORD`-je |
+
+A portok csak a saját gépről érhetők el (8000 szerver, 5432 PostgreSQL, 5050 pgAdmin).
+
+## 5. Tiszta adatbázis (például bemutató előtt)
+
+Törli a beolvasásokat és mindent, majd újratölt; kb. 30 másodperc.
+
+```bash
+uv run alembic downgrade base
+```
+
+```bash
+uv run alembic upgrade head
+```
+
+```bash
+uv run python scripts/seed.py
+```
+
+A CI-vel azonos ellenőrzések, commit előtt:
+
+```bash
+uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run pytest
+```
+
+## 6. Ha valami nem megy
+
+| Amit látsz | Ok | Teendő |
+|---|---|---|
+| `docker`: nem található, vagy „cannot connect to the Docker API” | a Rancher Desktop nem fut, vagy containerd a motor | indítsd el; Preferences → Container Engine → dockerd (moby) |
+| `Hiányzó forrásfájl: …` | nincs meg a két XLSX | 2. pont, a `source-data` mappa vagy a `SOURCE_XLSX_DIR` |
+| a seed minden sorra „Duplikált eszköz-kulcs”-ot ír | már be van töltve | ha újra kell, az 5. pont |
+| a szerver első kérése, vagy a seed eleje percekig áll | a `.env` `DATABASE_URL`-jében `localhost` van | írd át `127.0.0.1`-re (Windowson a localhost előbb IPv6-on próbál) |
+| a kliensben minden kérés kb. 2 másodperc | a bejelentkezésnél `localhost` a szerver címe | írd át `http://127.0.0.1:8000`-ra; megmarad |
+| „Érvénytelen vagy lejárt token.” | a belépés 1 óráig érvényes | zárd be a klienst és lépj be újra |
+| „A szerver nem válaszolt időben”, vagy a 8000-es port foglalt | egy korábbi szerver még fut | lent |
+| a pgAdmin konténer újraindul körbe | `.local` végű `PGADMIN_EMAIL` | maradjon a mintabeli `admin@leltariv.hu` |
+| az 5432-es port foglalt | fut egy helyi PostgreSQL | a `.env`-ben `POSTGRES_PORT` és a `DATABASE_URL` portja legyen ugyanaz a szabad port |
+
+A 8000-es portot foglaló folyamat leállítása (PowerShell):
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+```
+
+## 7. Később: a Supabase-stack (a futtatáshoz nem kell)
 
 A dolgozat 10.2 fejezete a Supabase-stacket írja le infrastruktúraként (db, kong, meta, studio,
 auth, storage). A prototípus a sima Postgresen indult, mert az azonnal futott; a stack ráépül, a
@@ -130,7 +246,7 @@ belülről"-re kell javítani.
 Két sor a `codee/.env`-ben:
 
 ```
-DATABASE_URL=postgresql+psycopg://postgres:<supabase_postgres_password>@localhost:5432/postgres
+DATABASE_URL=postgresql+psycopg://postgres:<supabase_postgres_password>@127.0.0.1:5432/postgres
 AUTH_MODE=gotrue
 GOTRUE_URL=http://localhost:8100/auth/v1
 JWT_SECRET=<a supabase/.env-bol atmasolva>
@@ -141,7 +257,7 @@ A séma és a seed változatlan marad, mert mindkét fázisban ugyanaz a Postgre
 > A `supabase/.env` **valódi titkokat tartalmaz** a generálás után. A gyökér `.gitignore` minden
 > `.env`-et kizár, de érdemes ellenőrizni, hogy tényleg nem jelenik-e meg a `git status`-ban.
 
-## Portkiosztás a 2. fázisban
+### Portkiosztás a 2. fázisban
 
 A Supabase gyárilag a **8000-es portra teszi a Kongot**, ami ütközne a FastAPI-val. Ezért a
 `.env`-ben `KONG_HTTP_PORT=8100`.
@@ -154,36 +270,3 @@ A Supabase gyárilag a **8000-es portra teszi a Kongot**, ami ütközne a FastAP
 | 5432 | PostgreSQL |
 
 Ellenőrizni kell, hogy nem fut-e valakinek helyi Postgresa az 5432-n.
-
-## Indítás
-
-```bash
-uv sync
-```
-
-```bash
-uv run pytest
-```
-
-```bash
-docker compose up -d
-```
-
-Ha a `uv sync` lefut, a három teszt zöld, és a Studio megnyílik a 3000-en, a váz kész.
-
-## Munkarend
-
-| Terület | Gazdája |
-|---|---|
-| `pyproject.toml`, `uv.lock`, `docker-compose.yml`, `.env.example`, `packages/contracts/` | Sanyi |
-| `packages/infrastructure/`, `packages/server/`, `packages/domain/`, `scripts/seed.py` | Dani |
-| `packages/client/`, `.github/`, `.gitignore`, `README.md` | Ádám |
-
-Két ág a `main`-ről: `feat/db-server` és `feat/client`. Összefésülés hétfő 20:00.
-**Új függőséget senki nem vesz fel egyedül** — szól, és egy helyen megy be, különben a `uv.lock`
-ütközik.
-
-A `qdarktheme` szándékosan nincs a kliens függőségei között: a legutóbbi kiadása Python 3.12 előtti,
-és el tudja rontani a `uv sync`-et. Ádám adja hozzá, ha nála települ.
-
-A részletes feladatlapokat és a háttéranyagot Sanyi küldi közvetlenül.

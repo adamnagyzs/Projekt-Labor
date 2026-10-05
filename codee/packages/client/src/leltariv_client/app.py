@@ -120,7 +120,9 @@ class LoginDialog(QDialog):
         self.setFixedSize(350, 250)
 
         self.config_path = get_config_path()
-        saved_url = "http://localhost:8000"
+        # 127.0.0.1, nem localhost: Windowson a localhost előbb IPv6-on próbál, és minden
+        # új kapcsolat (5 mp tétlenség után) 2 másodpercet vár, mielőtt IPv4-re vált.
+        saved_url = "http://127.0.0.1:8000"
         saved_email = ""
         if self.config_path.exists():
             try:
@@ -343,19 +345,24 @@ def main():
     app = QApplication(sys.argv)
     qdarktheme.setup_theme("auto")
 
+    # Hibás belépés után az ablak visszajön (cím és e-mail marad, a jelszó törlődik);
+    # csak a Mégse lép ki. Különben egy elgépelt jelszó az indítóval a szervert is leállítaná.
     dialog = LoginDialog()
-    if dialog.exec() == QDialog.DialogCode.Accepted:
+    while dialog.exec() == QDialog.DialogCode.Accepted:
         dialog.save_config()
         api = HttpApiClient(dialog.url_input.text())
-
-        req = LoginRequest(email=dialog.email_input.text(), password=dialog.pwd_input.text())
         try:
+            req = LoginRequest(email=dialog.email_input.text(), password=dialog.pwd_input.text())
             resp = api.login(req)
-            window = MainWindow(api, resp.access_token, resp.display_name, resp.role)
-            window.show()
-            sys.exit(app.exec())
         except Exception as e:
-            QMessageBox.critical(None, "Belépési hiba", str(e))
+            QMessageBox.critical(dialog, "Belépési hiba", str(e))
+            dialog.pwd_input.clear()
+            dialog.pwd_input.setFocus()
+            continue
+
+        window = MainWindow(api, resp.access_token, resp.display_name, resp.role)
+        window.show()
+        sys.exit(app.exec())
 
 
 if __name__ == "__main__":
