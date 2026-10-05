@@ -424,6 +424,12 @@ def main() -> None:
     session = SessionLocal()
 
     try:
+        # Az indító minden induláskor meghívja: ha már van adat, ne próbálja újra betölteni.
+        loaded = session.scalar(select(func.count()).select_from(Asset)) or 0
+        if loaded:
+            print(f"Az adatbázis már be van töltve ({loaded} eszköz), a seed kihagyva.")
+            return
+
         get_or_create_period(session)
         seed_users(session)
 

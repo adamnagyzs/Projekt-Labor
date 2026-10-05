@@ -142,10 +142,25 @@ def start_database(workspace: Path) -> None:
     print("Adatbázis indítása...")
     docker = find_tool("docker")
 
-    if run([docker, "compose", "up", "-d"], workspace) != 0:
+    # --wait: csak akkor tér vissza, ha az adatbázis már fogad kapcsolatot.
+    if run([docker, "compose", "up", "-d", "--wait"], workspace) != 0:
         raise SystemExit(
             "\nA konténerek nem indultak el.\n"
             "Fut a Docker (Rancher Desktop)? Indítsd el, és próbáld újra."
+        )
+
+
+def prepare_database(uv: str, workspace: Path) -> None:
+    """Séma és adatok: friss gépen felépít és betölt, utána már csak ellenőriz."""
+    print("Adatbázis-séma...")
+    if run([uv, "run", "alembic", "upgrade", "head"], workspace) != 0:
+        raise SystemExit("\nA migráció nem futott le. A fenti üzenet mondja meg, miért.")
+
+    print("Adatok...")
+    if run([uv, "run", "python", "scripts/seed.py"], workspace) != 0:
+        raise SystemExit(
+            "\nAz adatok betöltése nem sikerült. Ha a két XLSX hiányzik, másold őket a\n"
+            "codee/source-data mappába (vagy állítsd be a SOURCE_XLSX_DIR-t a .env-ben)."
         )
 
 
@@ -189,6 +204,7 @@ def main() -> None:
             print("A .env nem létezett, létrehoztam a mintából. Nézd át, ha valami nem stimmel.\n")
 
     start_database(workspace)
+    prepare_database(uv, workspace)
 
     print("Szerver indítása...")
     server = subprocess.Popen(

@@ -1,7 +1,8 @@
 # Telepítés és indítás
 
-Friss gépen kb. 3 perc, utána egy paranccsal indul az egész: adatbázis, szerver, kliens. Minden
-parancs a `codee` mappából fut. A lépéseket 2026. október 5-én tiszta klónon végigpróbáltuk.
+Egyetlen parancs viszi végig: friss gépen kb. 1–2 perc a kliensig (plusz a Docker-képek első
+letöltése), utána minden indítás kb. 10 másodperc. Minden parancs a `codee` mappából fut. 2026.
+október 5-én tiszta klónon, üres adatbázissal kipróbáltuk.
 
 ## 1. Ami kell hozzá (egyszer)
 
@@ -21,7 +22,7 @@ A Rancher Desktopban a **Preferences → Container Engine** legyen **dockerd (mo
 `docker compose` parancs nem működik. Indításkor legyen bekapcsolva; az első indulása eltart egy
 darabig, ezt érdemes előre megvárni.
 
-## 2. Első telepítés
+## 2. Indítás egy paranccsal (első alkalommal is)
 
 ```bash
 git clone https://github.com/adamnagyzs/Projekt-Labor.git
@@ -31,52 +32,40 @@ git clone https://github.com/adamnagyzs/Projekt-Labor.git
 cd Projekt-Labor/codee
 ```
 
-A beállítások a mintából (PowerShellben `copy .env.example .env`):
-
-```bash
-cp .env.example .env
-```
-
 A két forrásfájlt (`261 lista_20260909.XLSX`, `262 lista_20260909.XLSX`, pontosan ezzel a névvel)
 másold a `codee/source-data` mappába; ha nincs ilyen mappa, hozd létre. Ezek nincsenek a repóban,
-mert a metaadatukban személyes adat van, és a `.gitignore` minden xlsx-et kizár. Ha máshol vannak,
+és nem is kerülhetnek bele: az egyetem nem nyilvános adatai, a metaadatukban személynév van, és a
+`.gitignore` minden xlsx-et kizár. A csapat privát tárolójából vagy a csapattól kapod meg őket. Ha máshol vannak,
 a `.env`-ben a `SOURCE_XLSX_DIR` sorba írd a mappájukat.
-
-Csomagok (kb. 1 perc első alkalommal):
-
-```bash
-uv sync --frozen
-```
-
-Adatbázis (első alkalommal letölti a két képet, kb. 350 MB):
-
-```bash
-docker compose up -d
-```
-
-Séma:
-
-```bash
-uv run alembic upgrade head
-```
-
-Az adatok betöltése (kb. 30 másodperc):
-
-```bash
-uv run python scripts/seed.py
-```
-
-A végén ezt kell kiírnia: `Seed kész: 3620/3620 eszköz, 0 hibás sor, 763 tartozék a főeszközéhez kötve.`
-
-## 3. Indítás (minden alkalommal)
 
 ```bash
 uv run python scripts/start.py
 ```
 
-Ez elindítja a konténereket, a szervert, megvárja, hogy válaszoljon, majd megnyitja a klienst. A
-kliens ablakának bezárásával a szerver is leáll. Ugyanezt csinálja a `Leltariv.exe`, ami dupla
-kattintással indul; ez nincs a repóban, de egy paranccsal elkészül a `dist` mappába:
+Ennyi. A szkript sorban:
+
+1. ha nincs `.env`, létrehozza a mintából (a meglévőt nem írja felül);
+2. az `uv run` telepíti a Pythont és a csomagokat, ha még nincsenek meg;
+3. elindítja a konténereket, és megvárja, hogy az adatbázis fogadjon (`docker compose up -d --wait`);
+4. felépíti vagy frissíti a sémát (`alembic upgrade head`);
+5. betölti az adatokat, **ha az adatbázis még üres** (kb. 30 mp; különben kiírja, hogy kihagyta);
+6. elindítja a szervert, megvárja, hogy válaszoljon;
+7. megnyitja a klienst. A kliens ablakának bezárásával a szerver is leáll.
+
+Első alkalommal ezt kell látnod:
+
+```text
+Adatbázis indítása...
+Adatbázis-séma...
+Adatok...
+Seed kész: 3620/3620 eszköz, 0 hibás sor, 763 tartozék a főeszközéhez kötve.
+Szerver indítása...
+Várom a szervert... kész.
+Kliens indítása. Az ablak bezárásával minden leáll.
+```
+
+Ugyanezt csinálja a `Leltariv.exe`, ami dupla kattintással indul; ez nincs a repóban, de egy
+paranccsal elkészül a `dist` mappába:
 
 ```bash
 uv run --with pyinstaller pyinstaller --onefile --name Leltariv scripts/start.py
@@ -93,7 +82,28 @@ A bejelentkező ablakba:
 Elgépelt jelszó után az ablak visszajön, újra lehet próbálni. A kliens megjegyzi a címet és az
 e-mailt, a jelszót nem.
 
-Indító nélkül, két külön ablakban:
+## 3. Kézzel, lépésenként
+
+Csak akkor kell, ha egy lépést külön akarsz futtatni (például hibakereséskor). Ugyanaz, mint amit a
+szkript csinál. A `.env`-et csak akkor másold, ha még nincs: a meglévőt felülírná.
+
+```bash
+uv sync --frozen
+```
+
+```bash
+docker compose up -d --wait
+```
+
+```bash
+uv run alembic upgrade head
+```
+
+```bash
+uv run python scripts/seed.py
+```
+
+Szerver és kliens, két külön ablakban:
 
 ```bash
 uv run uvicorn leltariv_server.main:app --host 127.0.0.1 --port 8000
@@ -140,8 +150,9 @@ uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run 
 | Amit látsz | Ok | Teendő |
 |---|---|---|
 | `docker`: nem található, vagy „cannot connect to the Docker API” | a Rancher Desktop nem fut, vagy containerd a motor | indítsd el; Preferences → Container Engine → dockerd (moby) |
-| `Hiányzó forrásfájl: …` | nincs meg a két XLSX | 2. pont, a `source-data` mappa vagy a `SOURCE_XLSX_DIR` |
-| a seed minden sorra „Duplikált eszköz-kulcs”-ot ír | már be van töltve | ha újra kell, az 5. pont |
+| `Hiányzó forrásfájl: …` / „Az adatok betöltése nem sikerült” | nincs meg a két XLSX | 2. pont, a `source-data` mappa vagy a `SOURCE_XLSX_DIR` |
+| „Az adatbázis már be van töltve …, a seed kihagyva.” | már van adat | ez a helyes; újratöltés: az 5. pont |
+| a seed nem találja az XLSX-et, pedig korábban ment | a `.env`-et felülírta a minta (`cp .env.example .env`) | írd vissza a `SOURCE_XLSX_DIR`-t, vagy tedd a fájlokat a `source-data` mappába |
 | a szerver első kérése, vagy a seed eleje percekig áll | a `.env` `DATABASE_URL`-jében `localhost` van | írd át `127.0.0.1`-re (Windowson a localhost előbb IPv6-on próbál) |
 | a kliensben minden kérés kb. 2 másodperc | a bejelentkezésnél `localhost` a szerver címe | írd át `http://127.0.0.1:8000`-ra; megmarad |
 | „Érvénytelen vagy lejárt token.” | a belépés 1 óráig érvényes | zárd be a klienst és lépj be újra |
