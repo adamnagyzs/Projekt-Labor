@@ -1,13 +1,13 @@
 import time
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Protocol
 from uuid import UUID, uuid4
 
 import httpx
-from leltariv_contracts.assets import AssetListItem, AssetPage, AssetDetail
+from leltariv_contracts.assets import AssetDetail, AssetListItem, AssetPage
 from leltariv_contracts.auth import LoginRequest, LoginResponse
+from leltariv_contracts.inventory import ScanOut, SessionOut
 from leltariv_contracts.zones import ZoneOut
-from leltariv_contracts.inventory import SessionCreate, SessionOut, ScanCreate, ScanOut, ScanResult
 
 API_PREFIX = "/api/v1"
 TIMEOUT_SECONDS = 10.0
@@ -17,7 +17,14 @@ class ApiClient(Protocol):
     def login(self, request: LoginRequest) -> LoginResponse: ...
     def get_zones(self, token: str) -> list[ZoneOut]: ...
     def get_assets(
-        self, token: str, zone: str | None, q: str | None, page: int, page_size: int, main_only: bool = False, multi_only: bool = False
+        self,
+        token: str,
+        zone: str | None,
+        q: str | None,
+        page: int,
+        page_size: int,
+        main_only: bool = False,
+        multi_only: bool = False,
     ) -> AssetPage: ...
     def get_asset(self, token: str, asset_id: UUID) -> AssetDetail: ...
     def start_session(self, token: str, zone_code: str) -> SessionOut: ...
@@ -80,18 +87,25 @@ class HttpApiClient:
         return [ZoneOut.model_validate(zone) for zone in payload]  # type: ignore[union-attr]
 
     def get_assets(
-        self, token: str, zone: str | None, q: str | None, page: int, page_size: int, main_only: bool = False, multi_only: bool = False
+        self,
+        token: str,
+        zone: str | None,
+        q: str | None,
+        page: int,
+        page_size: int,
+        main_only: bool = False,
+        multi_only: bool = False,
     ) -> AssetPage:
-        params: dict[str, str | int] = {
-            "page": page, 
-            "page_size": page_size,
-            "main_only": str(main_only).lower(),
-            "multi_only": str(multi_only).lower()
-        }
+        params: dict[str, str | int] = {"page": page, "page_size": page_size}
         if zone:
             params["zone"] = zone
         if q:
             params["q"] = q
+        # Csak a bekapcsolt szűrő megy át; a szerver alapértéke amúgy is false.
+        if main_only:
+            params["main_only"] = "true"
+        if multi_only:
+            params["multi_only"] = "true"
 
         payload = self._request("GET", "/assets", token=token, params=params)
         return AssetPage.model_validate(payload)
@@ -105,13 +119,67 @@ class HttpApiClient:
         return SessionOut.model_validate(payload)
 
     def post_scan(self, token: str, session_id: UUID, raw_code: str) -> ScanOut:
-        payload = self._request("POST", f"/sessions/{session_id}/scans", token=token, json={"raw_code": raw_code})
+        payload = self._request(
+            "POST", f"/sessions/{session_id}/scans", token=token, json={"raw_code": raw_code}
+        )
         return ScanOut.model_validate(payload)
 
 
+#: a hamis kliens állománya; a leltárszámok szándékosan körzetenként különböznek
+FAKE_ASSETS = [
+    AssetListItem(
+        id=uuid4(),
+        asset_number="3021345",
+        sub_number=0,
+        name="Dell Latitude 5530",
+        zone_code="261",
+        inventory_number="L-1001",
+        quantity=1,
+        activated_on=date(2023, 1, 15),
+        serial_number="SN12345",
+    ),
+    AssetListItem(
+        id=uuid4(),
+        asset_number="3021346",
+        sub_number=0,
+        name="Irodai szék (kék)",
+        zone_code="261",
+        inventory_number="L-1002",
+        quantity=30,
+        activated_on=date(2020, 5, 10),
+        serial_number=None,
+    ),
+    AssetListItem(
+        id=uuid4(),
+        asset_number="3021347",
+        sub_number=1,
+        name="Oszcilloszkóp",
+        zone_code="262",
+        inventory_number="L-2050",
+        quantity=2,
+        activated_on=date(2019, 9, 1),
+        serial_number="OSZ-99",
+    ),
+    AssetListItem(
+        id=uuid4(),
+        asset_number="3021348",
+        sub_number=0,
+        name="Tárgyalóasztal",
+        zone_code="262",
+        inventory_number="L-2051",
+        quantity=1,
+        activated_on=None,
+        serial_number=None,
+    ),
+]
+
+
 class FakeApiClient:
+    """Szerver nélküli kliens a felület kipróbálásához; a szerver szabályait utánozza."""
+
     def __init__(self, base_url: str):
         self.base_url = base_url
+        self._session_zones: dict[UUID, str] = {}
 
     def login(self, request: LoginRequest) -> LoginResponse:
         time.sleep(1)
@@ -132,59 +200,20 @@ class FakeApiClient:
         ]
 
     def get_assets(
-        self, token: str, zone: str | None, q: str | None, page: int, page_size: int, main_only: bool = False, multi_only: bool = False
+        self,
+        token: str,
+        zone: str | None,
+        q: str | None,
+        page: int,
+        page_size: int,
+        main_only: bool = False,
+        multi_only: bool = False,
     ) -> AssetPage:
         time.sleep(0.5)
-        items = [
-            AssetListItem(
-                id=uuid4(),
-                asset_number="3021345",
-                sub_number=0,
-                name="Dell Latitude 5530",
-                zone_code="261",
-                inventory_number="L-1001",
-                quantity=1,
-                activated_on=date(2023, 1, 15),
-                serial_number="SN12345",
-            ),
-            AssetListItem(
-                id=uuid4(),
-                asset_number="3021346",
-                sub_number=0,
-                name="Irodai szék (kék)",
-                zone_code="261",
-                inventory_number="L-1002",
-                quantity=30,
-                activated_on=date(2020, 5, 10),
-                serial_number=None,
-            ),
-            AssetListItem(
-                id=uuid4(),
-                asset_number="3021347",
-                sub_number=1,
-                name="Oszcilloszkóp",
-                zone_code="262",
-                inventory_number="L-2050",
-                quantity=2,
-                activated_on=date(2019, 9, 1),
-                serial_number="OSZ-99",
-            ),
-            AssetListItem(
-                id=uuid4(),
-                asset_number="3021348",
-                sub_number=0,
-                name="Tárgyalóasztal",
-                zone_code="262",
-                inventory_number="L-2051",
-                quantity=1,
-                activated_on=None,
-                serial_number=None,
-            ),
-        ]
-        
+        items = FAKE_ASSETS
         if q:
             items = [i for i in items if q.lower() in i.name.lower()]
-        if zone and zone != "Mind":
+        if zone:
             items = [i for i in items if i.zone_code == zone]
         if main_only:
             items = [i for i in items if i.sub_number == 0]
@@ -195,147 +224,58 @@ class FakeApiClient:
 
     def get_asset(self, token: str, asset_id: UUID) -> AssetDetail:
         time.sleep(0.3)
+        item = next((i for i in FAKE_ASSETS if i.id == asset_id), None)
+        if item is None:
+            raise ValueError("A megadott eszköz nem található.")
         return AssetDetail(
-            id=asset_id, 
-            asset_number="123456", 
-            sub_number=0, 
-            name="Teszt Eszköz Részletező", 
-            zone_code="261", 
-            quantity=1, 
-            codes=[], 
-            accessories=[]
+            id=item.id,
+            asset_number=item.asset_number,
+            sub_number=item.sub_number,
+            name=item.name,
+            zone_code=item.zone_code,
+            quantity=item.quantity,
+            activated_on=item.activated_on,
+            serial_number=item.serial_number,
+            codes=[],
+            accessories=[],
         )
 
     def start_session(self, token: str, zone_code: str) -> SessionOut:
         time.sleep(0.2)
+        session_id = uuid4()
+        self._session_zones[session_id] = zone_code
         return SessionOut(
-            id=uuid4(), 
-            zone_code=zone_code, 
-            period_name="2026. évi leltár", 
-            started_at=datetime.now()
+            id=session_id,
+            zone_code=zone_code,
+            period_name="2026. évi leltár",
+            started_at=datetime.now(UTC),
         )
 
     def post_scan(self, token: str, session_id: UUID, raw_code: str) -> ScanOut:
         time.sleep(0.1)
-        first_char = raw_code[0].upper() if raw_code else ""
-        
-        if first_char == 'X':
-            res = "UNKNOWN_CODE"
-            msg = f"Ismeretlen kód: {raw_code}. Rögzítettük, de nem tartozik hozzá eszköz."
-        elif first_char == '1':
-            res = "FOREIGN_ZONE"
-            msg = f"Idegen körzet: a(z) {raw_code} kód több másik körzetben is szerepel."
+        active_zone = self._session_zones.get(session_id)
+        if active_zone is None:
+            raise ValueError("A megadott munkamenet nem található.")
+
+        asset = next((i for i in FAKE_ASSETS if i.inventory_number == raw_code), None)
+        if asset is None:
+            result, message = (
+                "UNKNOWN_CODE",
+                f"Ismeretlen kód: {raw_code}. Rögzítettük, de nem tartozik hozzá eszköz.",
+            )
+        elif asset.zone_code == active_zone:
+            result, message = "FOUND", f"Rendben: {asset.name}."
         else:
-            res = "FOUND"
-            msg = "Rendben: Teszt Eszköz."
-            
+            result, message = (
+                "FOREIGN_ZONE",
+                f"Idegen körzet: {asset.name} a(z) {asset.zone_code} körzetben van nyilvántartva.",
+            )
+
         return ScanOut(
             id=uuid4(),
             raw_code=raw_code,
-            result=res,
-            scanned_at=datetime.now(),
-            asset=None,
-            message=msg
+            result=result,
+            scanned_at=datetime.now(UTC),
+            asset=asset,
+            message=message,
         )
-
-
-    # class FakeApiClient:
-    #     def __init__(self, base_url: str):
-    #         self.base_url = base_url
-
-    #     def login(self, request: LoginRequest) -> LoginResponse:
-    #         time.sleep(1)
-    #         if request.password != "admin":
-    #             raise ValueError("Hibás e-mail vagy jelszó! (Teszt jelszó: admin)")
-    #         return LoginResponse(
-    #             access_token="fake_token_123",
-    #             refresh_token="fake_refresh_456",
-    #             role="ADMIN",
-    #             display_name="Teszt Elek",
-    #         )
-
-    #     def get_zones(self, token: str) -> list[ZoneOut]:
-    #         time.sleep(0.3)
-    #         return [
-    #             ZoneOut(id=1, code="261", name="Informatika Tanszék"),
-    #             ZoneOut(id=2, code="262", name="Gépész Tanszék"),
-    #         ]
-
-    #     def get_assets(
-    #         self, token: str, zone: str | None, q: str | None, page: int, page_size: int, main_only: bool = False, multi_only: bool = False
-    #     ) -> AssetPage:
-    #         time.sleep(0.5)
-    #         items = [
-    #             AssetListItem(
-    #                 id=uuid4(), asset_number="3021345", sub_number=0, name="Dell Latitude 5530",
-    #                 zone_code="261", inventory_number="L-1001", quantity=1, activated_on=date(2023, 1, 15), serial_number="SN12345",
-    #             ),
-    #             AssetListItem(
-    #                 id=uuid4(), asset_number="3021346", sub_number=0, name="Irodai szék (kék)",
-    #                 zone_code="261", inventory_number="L-1002", quantity=30, activated_on=date(2020, 5, 10), serial_number=None,
-    #             ),
-    #             AssetListItem(
-    #                 id=uuid4(), asset_number="3021347", sub_number=1, name="Oszcilloszkóp",
-    #                 zone_code="262", inventory_number="L-2050", quantity=2, activated_on=date(2019, 9, 1), serial_number="OSZ-99",
-    #             ),
-    #             AssetListItem(
-    #                 id=uuid4(), asset_number="3021348", sub_number=0, name="Tárgyalóasztal",
-    #                 zone_code="262", inventory_number="L-2051", quantity=1, activated_on=None, serial_number=None,
-    #             ),
-    #         ]
-            
-    #         if q:
-    #             items = [i for i in items if q.lower() in i.name.lower()]
-    #         if zone and zone != "Mind":
-    #             items = [i for i in items if i.zone_code == zone]
-    #         if main_only:
-    #             items = [i for i in items if i.sub_number == 0]
-    #         if multi_only:
-    #             items = [i for i in items if i.quantity > 1]
-
-    #         return AssetPage(items=items, total=len(items), page=page, page_size=page_size)
-
-    #     def get_asset(self, token: str, asset_id: UUID) -> AssetDetail:
-    #         time.sleep(0.3)
-    #         return AssetDetail(
-    #             id=asset_id, 
-    #             asset_number="123456", 
-    #             sub_number=0, 
-    #             name="Teszt Eszköz Részletező", 
-    #             zone_code="261", 
-    #             quantity=1, 
-    #             codes=[], 
-    #             accessories=[]
-    #         )
-
-    #     def start_session(self, token: str, zone_code: str) -> SessionOut:
-    #         time.sleep(0.2)
-    #         return SessionOut(
-    #             id=uuid4(), 
-    #             zone_code=zone_code, 
-    #             period_name="2026. évi leltár", 
-    #             started_at=datetime.now()
-    #         )
-
-    #     def post_scan(self, token: str, session_id: UUID, raw_code: str) -> ScanOut:
-    #         time.sleep(0.1)
-    #         first_char = raw_code[0].upper() if raw_code else ""
-            
-    #         if first_char == 'X':
-    #             res = "UNKNOWN_CODE"
-    #             msg = f"Ismeretlen kód: {raw_code}. Rögzítettük, de nem tartozik hozzá eszköz."
-    #         elif first_char == '1':
-    #             res = "FOREIGN_ZONE"
-    #             msg = f"Idegen körzet: a(z) {raw_code} kód több másik körzetben is szerepel."
-    #         else:
-    #             res = "FOUND"
-    #             msg = "Rendben: Teszt Eszköz."
-                
-    #         return ScanOut(
-    #             id=uuid4(),
-    #             raw_code=raw_code,
-    #             result=res,
-    #             scanned_at=datetime.now(),
-    #             asset=None,
-    #             message=msg
-    #         )
