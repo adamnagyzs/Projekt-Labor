@@ -120,7 +120,9 @@ class LoginDialog(QDialog):
         self.setFixedSize(350, 250)
 
         self.config_path = get_config_path()
-        saved_url = "http://localhost:8000"
+        # 127.0.0.1, nem localhost: Windowson a localhost előbb IPv6-on próbál, és minden
+        # új kapcsolat (5 mp tétlenség után) 2 másodpercet vár, mielőtt IPv4-re vált.
+        saved_url = "http://127.0.0.1:8000"
         saved_email = ""
         if self.config_path.exists():
             try:
