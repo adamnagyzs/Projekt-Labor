@@ -10,6 +10,7 @@ from PySide6.QtCore import QAbstractTableModel, QSortFilterProxyModel, Qt, QThre
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from leltariv_client.api import HttpApiClient
+from leltariv_client.dialogs import AssetDetailDialog
 from leltariv_client.worker import Worker
 
 #: hány sor jöjjön egy lapon. A szerver 100-ban maximálja.
@@ -100,6 +102,9 @@ class AssetTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             return self.headers[section]
         return None
+
+    def item_at(self, row: int):
+        return self._data[row]
 
     def update_data(self, new_data):
         self.beginResetModel()
@@ -213,7 +218,14 @@ class MainWindow(QMainWindow):
         self.zone_combo.addItem("Mind")
         self.zone_combo.currentTextChanged.connect(self.trigger_search)
 
+        self.main_only_cb = QCheckBox("Csak főeszközök")
+        self.multi_only_cb = QCheckBox("Csak többdarabos")
+        self.main_only_cb.toggled.connect(self.trigger_search)
+        self.multi_only_cb.toggled.connect(self.trigger_search)
+
         filter_layout.addWidget(self.zone_combo)
+        filter_layout.addWidget(self.main_only_cb)
+        filter_layout.addWidget(self.multi_only_cb)
         filter_layout.addWidget(self.search_input)
         layout.addLayout(filter_layout)
 
@@ -245,12 +257,18 @@ class MainWindow(QMainWindow):
         footer.addWidget(self.prev_button)
         footer.addWidget(self.next_button)
         layout.addLayout(footer)
+
+        self.table.doubleClicked.connect(self.on_row_double_clicked)
         return page
 
     def trigger_search(self):
-        """Új keresés vagy körzetváltás: mindig az első oldalról indulunk."""
+        """Új keresés, körzet- vagy szűrőváltás: mindig az első oldalról indulunk."""
         self.current_page = 1
         self.load_page()
+
+    def on_row_double_clicked(self, index):
+        item = self.model.item_at(self.proxy_model.mapToSource(index).row())
+        AssetDetailDialog(self.api, self.token, item.id, self).exec()
 
     def go_previous_page(self):
         if self.current_page > 1:
@@ -274,6 +292,8 @@ class MainWindow(QMainWindow):
             self.search_input.text(),
             self.current_page,
             PAGE_SIZE,
+            self.main_only_cb.isChecked(),
+            self.multi_only_cb.isChecked(),
         )
         worker.signals.finished.connect(self.on_assets_loaded)
         worker.signals.error.connect(self.on_error)
