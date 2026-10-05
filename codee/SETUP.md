@@ -130,7 +130,7 @@ belülről"-re kell javítani.
 Két sor a `codee/.env`-ben:
 
 ```
-DATABASE_URL=postgresql+psycopg://postgres:<supabase_postgres_password>@localhost:5432/postgres
+DATABASE_URL=postgresql+psycopg://postgres:<supabase_postgres_password>@127.0.0.1:5432/postgres
 AUTH_MODE=gotrue
 GOTRUE_URL=http://localhost:8100/auth/v1
 JWT_SECRET=<a supabase/.env-bol atmasolva>
