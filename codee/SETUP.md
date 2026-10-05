@@ -34,7 +34,8 @@ cd Projekt-Labor/codee
 
 A két forrásfájlt (`261 lista_20260909.XLSX`, `262 lista_20260909.XLSX`, pontosan ezzel a névvel)
 másold a `codee/source-data` mappába; ha nincs ilyen mappa, hozd létre. Ezek nincsenek a repóban,
-mert a metaadatukban személyes adat van, és a `.gitignore` minden xlsx-et kizár. Ha máshol vannak,
+és nem is kerülhetnek bele: az egyetem nem nyilvános adatai, a metaadatukban személynév van, és a
+`.gitignore` minden xlsx-et kizár. A csapat privát tárolójából vagy a csapattól kapod meg őket. Ha máshol vannak,
 a `.env`-ben a `SOURCE_XLSX_DIR` sorba írd a mappájukat.
 
 ```bash
