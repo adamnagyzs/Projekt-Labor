@@ -13,18 +13,14 @@ Egyetemi eszközleltározó kliens–szerver rendszer. A leltározó a terepen v
 * **Eszközök:** uv, ruff, pyright, pytest, Docker
 
 ## Futtatási útmutató
-Kell hozzá: Git, [uv](https://docs.astral.sh/uv/) és futó Rancher Desktop (dockerd motorral). Pythont nem kell külön telepíteni, az uv hozza. A részletes leírás, a hibaelhárítással együtt: [codee/SETUP.md](codee/SETUP.md).
+Kell hozzá: Git, [uv](https://docs.astral.sh/uv/) és futó Rancher Desktop (dockerd motorral). Pythont nem kell külön telepíteni, az uv hozza.
 
-Első alkalommal, a `codee` mappából:
+1. `git clone https://github.com/adamnagyzs/Projekt-Labor.git`, majd `cd Projekt-Labor/codee`
+2. A két forrásfájl (`261 lista_20260909.XLSX`, `262 lista_20260909.XLSX`) a `codee/source-data` mappába; ezek nincsenek a repóban
+3. `uv run python scripts/start.py`
 
-1. `cd codee`
-2. `cp .env.example .env` (beállítások; PowerShellben `copy .env.example .env`)
-3. A két forrásfájl (`261 lista_20260909.XLSX`, `262 lista_20260909.XLSX`) a `codee/source-data` mappába; ezek nincsenek a repóban
-4. `uv sync --frozen` (Python és függőségek, kb. 1 perc)
-5. `docker compose up -d` (adatbázis indítása)
-6. `uv run alembic upgrade head` (séma)
-7. `uv run python scripts/seed.py` (adatok betöltése, kb. 30 mp; a végén: `Seed kész: 3620/3620 eszköz`)
-
-Indítás minden alkalommal: `uv run python scripts/start.py` — elindítja az adatbázist, a szervert és a klienst; a kliens bezárásával minden leáll.
+Ez az egy parancs mindent elvégez: beállítások (`.env`), Python és csomagok, adatbázis, séma, adatok betöltése (csak ha még üres), szerver és kliens. Első alkalommal kb. 1–2 perc, utána kb. 10 másodperc. A kliens bezárásával a szerver is leáll.
 
 Belépés: szerver címe `http://127.0.0.1:8000`, az e-mail és a jelszó a `.env` `DEMO_USER_EMAIL` és `DEMO_USER_PASSWORD` sora.
+
+A részletek, a kézi lépések és a hibaelhárítás: [codee/SETUP.md](codee/SETUP.md).
