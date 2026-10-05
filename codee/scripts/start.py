@@ -202,7 +202,12 @@ def main() -> None:
         run([uv, "run", "python", "-m", "leltariv_client.app"], workspace)
     finally:
         print("\nSzerver leállítása...")
-        server.terminate()
+        if os.name == "nt":
+            # Windowson a terminate csak az uv-t állítaná le, az alatta futó uvicorn
+            # árván tovább foglalná a 8000-es portot. A taskkill /T a teljes fát leállítja.
+            subprocess.run(["taskkill", "/PID", str(server.pid), "/T", "/F"], capture_output=True)
+        else:
+            server.terminate()
         try:
             server.wait(timeout=10)
         except subprocess.TimeoutExpired:
