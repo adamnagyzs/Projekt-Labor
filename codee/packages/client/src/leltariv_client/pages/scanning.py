@@ -11,7 +11,7 @@ következik a képernyő három szabálya:
 
 from collections import deque
 
-from PySide6.QtCore import QThreadPool
+from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QFont, QPalette
 from PySide6.QtWidgets import (
     QComboBox,
@@ -107,7 +107,7 @@ class ScanningPage(QWidget):
         self.recent = QListWidget()
         lower.addWidget(self.recent, stretch=2)
         self.simulator = ReaderSimulator(self.scan_input, self.on_enter)
-        lower.addWidget(self.simulator, stretch=1)
+        lower.addWidget(self.simulator, stretch=1, alignment=Qt.AlignmentFlag.AlignTop)
         layout.addLayout(lower)
         return panel
 
