@@ -2,6 +2,7 @@
 
 import random
 from collections.abc import Callable
+from typing import Any
 
 from PySide6.QtCore import QThreadPool, QTimer
 from PySide6.QtWidgets import QGroupBox, QLineEdit, QPushButton, QVBoxLayout
@@ -15,6 +16,9 @@ class ReaderSimulator(QGroupBox):
         self.target = target
         self.on_enter = on_enter
 
+        self.api: Any = None
+        self.token = ""
+        self.other_zone: str | None = None
         self.active_codes = []
         self.other_codes = []
 
@@ -43,29 +47,32 @@ class ReaderSimulator(QGroupBox):
         self.typing_index = 0
 
     def load(self, api, token: str, active_zone: str, other_zone: str | None) -> None:
+        self.api = api
+        self.token = token
+        self.other_zone = other_zone
         self.active_codes = []
         self.other_codes = []
         self.btn_valid.setEnabled(False)
         self.btn_foreign.setEnabled(False)
         self.btn_invalid.setEnabled(True)
+        self._fetch(active_zone, self._on_active_loaded)
 
-        def start(zone: str, on_loaded: Callable[[object], None]) -> None:
-            worker = Worker(api.get_assets, token, zone, None, 1, 50)
-            worker.signals.finished.connect(on_loaded)
-            worker.signals.error.connect(lambda e: print("Szimulátor hiba:", e))
-            QThreadPool.globalInstance().start(worker)
+    def _fetch(self, zone: str, on_loaded) -> None:
+        # Kötött metódus kell, nem lambda: csak így fut a válasz a felületi szálon.
+        worker = Worker(self.api.get_assets, self.token, zone, None, 1, 50)
+        worker.signals.finished.connect(on_loaded)
+        worker.signals.error.connect(self._on_load_error)
+        QThreadPool.globalInstance().start(worker)
 
-        # Az idegen körzet csak az aktív után jön, mert a kettő közös kódjait ki kell szűrni.
-        def on_active_loaded(page_data) -> None:
-            self._on_active_loaded(page_data)
-            if other_zone:
-                start(other_zone, self._on_other_loaded)
-
-        start(active_zone, on_active_loaded)
+    def _on_load_error(self, message: str) -> None:
+        print("Szimulátor hiba:", message)
 
     def _on_active_loaded(self, page_data):
         self.active_codes = [i.inventory_number for i in page_data.items if i.inventory_number]
         self.btn_valid.setEnabled(bool(self.active_codes))
+        # Az idegen körzet csak most jön, mert a kettő közös kódjait ki kell szűrni.
+        if self.other_zone:
+            self._fetch(self.other_zone, self._on_other_loaded)
 
     def _on_other_loaded(self, page_data):
         # Ami az aktív körzetben is szerepel (pl. 024540), az ott FOUND lenne, ezért kimarad.

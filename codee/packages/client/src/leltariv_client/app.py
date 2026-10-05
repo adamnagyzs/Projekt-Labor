@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from leltariv_client.api import HttpApiClient
 from leltariv_client.dialogs import AssetDetailDialog
+from leltariv_client.pages.scanning import ScanningPage
 from leltariv_client.worker import Worker
 
 #: hány sor jöjjön egy lapon. A szerver 100-ban maximálja.
@@ -195,12 +196,14 @@ class MainWindow(QMainWindow):
             )
         )
         self.stack.addWidget(self.asset_page)
+        self.stack.addWidget(ScanningPage(api, token))
         self.stack.setCurrentIndex(1)
         v_layout.addWidget(self.stack)
         h_layout.addLayout(v_layout)
 
         self.nav_list.currentRowChanged.connect(
-            lambda i: self.stack.setCurrentIndex(1 if i == 1 else 0)
+            # 1 = Eszközök, 2 = Leltározás; a többi menüpont még a „fejlesztés alatt" lap
+            lambda i: self.stack.setCurrentIndex(i if i in (1, 2) else 0)
         )
 
         self.load_zones()
