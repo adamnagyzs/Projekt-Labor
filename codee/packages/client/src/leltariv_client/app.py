@@ -316,6 +316,7 @@ class MainWindow(QMainWindow):
         )
         worker.signals.finished.connect(self.on_assets_loaded)
         worker.signals.error.connect(self.on_error)
+        self.latest_load = worker.signals
         QThreadPool.globalInstance().start(worker)
 
     def load_zones(self):
@@ -330,6 +331,10 @@ class MainWindow(QMainWindow):
         self.trigger_search()
 
     def on_assets_loaded(self, page_data):
+        # Gépelés vagy szűrőváltás közben több kérés is úton lehet, és nem sorrendben
+        # érnek vissza: csak a legutoljára elküldött válaszát mutatjuk.
+        if self.sender() is not self.latest_load:
+            return
         self.model.update_data(page_data.items)
 
         shown = len(page_data.items)
