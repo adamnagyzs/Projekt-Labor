@@ -4,9 +4,16 @@ from typing import Protocol
 from uuid import UUID, uuid4
 
 import httpx
-from leltariv_contracts.assets import AssetDetail, AssetListItem, AssetPage
+from leltariv_contracts.assets import (
+    AssetDetail,
+    AssetListItem,
+    AssetPage,
+    AssetTypeOut,
+    PersonOut,
+)
 from leltariv_contracts.auth import LoginRequest, LoginResponse
 from leltariv_contracts.inventory import ScanOut, SessionOut
+from leltariv_contracts.rooms import RoomOut
 from leltariv_contracts.zones import ZoneOut
 
 API_PREFIX = "/api/v1"
@@ -26,10 +33,29 @@ class ApiClient(Protocol):
         main_only: bool = False,
         multi_only: bool = False,
         field: str = "mind",
+        asset_type_id: int | None = None,
+        room_id: UUID | None = None,
+        person_id: UUID | None = None,
     ) -> AssetPage: ...
     def get_asset(self, token: str, asset_id: UUID) -> AssetDetail: ...
+    def get_asset_types(self, token: str) -> list[AssetTypeOut]: ...
+    def create_asset_type(self, token: str, name: str) -> AssetTypeOut: ...
+    def set_asset_type(self, token: str, asset_id: UUID, asset_type_id: int) -> AssetDetail: ...
+    def get_persons(self, token: str) -> list[PersonOut]: ...
+    def set_responsible(self, token: str, asset_id: UUID, person_id: UUID) -> AssetDetail: ...
+    def get_rooms(self, token: str, zone_code: str) -> list[RoomOut]: ...
+    def create_room(self, token: str, zone_code: str, room_number: str, name: str | None) -> RoomOut: ...
     def start_session(self, token: str, zone_code: str) -> SessionOut: ...
-    def post_scan(self, token: str, session_id: UUID, raw_code: str) -> ScanOut: ...
+    def post_scan(
+        self,
+        token: str,
+        session_id: UUID,
+        raw_code: str,
+        quantity: int = 1,
+        room_id: UUID | None = None,
+    ) -> ScanOut: ...
+    def undo_scan(self, token: str, session_id: UUID, scan_id: UUID) -> ScanOut: ...
+    def close_session(self, token: str, session_id: UUID) -> SessionOut: ...
 
 
 class HttpApiClient:
@@ -69,7 +95,6 @@ class HttpApiClient:
         if response.is_success:
             return response.json()
 
-        # A FastAPI hibaválasza {"detail": "..."} — ha mégsem az jön, a státuszt mutatjuk.
         try:
             detail = response.json().get("detail")
         except ValueError:
@@ -85,7 +110,7 @@ class HttpApiClient:
 
     def get_zones(self, token: str) -> list[ZoneOut]:
         payload = self._request("GET", "/zones", token=token)
-        return [ZoneOut.model_validate(zone) for zone in payload]  # type: ignore[union-attr]
+        return [ZoneOut.model_validate(zone) for zone in payload]
 
     def get_assets(
         self,
@@ -97,19 +122,27 @@ class HttpApiClient:
         main_only: bool = False,
         multi_only: bool = False,
         field: str = "mind",
+        asset_type_id: int | None = None,
+        room_id: UUID | None = None,
+        person_id: UUID | None = None,
     ) -> AssetPage:
         params: dict[str, str | int] = {"page": page, "page_size": page_size}
         if zone:
             params["zone"] = zone
         if q:
             params["q"] = q
-        # Csak a bekapcsolt szűrő megy át; a szerver alapértéke amúgy is false.
         if main_only:
             params["main_only"] = "true"
         if multi_only:
             params["multi_only"] = "true"
         if field != "mind":
             params["field"] = field
+        if asset_type_id is not None:
+            params["asset_type_id"] = asset_type_id
+        if room_id is not None:
+            params["room_id"] = str(room_id)
+        if person_id is not None:
+            params["person_id"] = str(person_id)
 
         payload = self._request("GET", "/assets", token=token, params=params)
         return AssetPage.model_validate(payload)
@@ -118,15 +151,64 @@ class HttpApiClient:
         payload = self._request("GET", f"/assets/{asset_id}", token=token)
         return AssetDetail.model_validate(payload)
 
+    def get_asset_types(self, token: str) -> list[AssetTypeOut]:
+        payload = self._request("GET", "/asset-types", token=token)
+        return [AssetTypeOut.model_validate(item) for item in payload]
+
+    def create_asset_type(self, token: str, name: str) -> AssetTypeOut:
+        payload = self._request("POST", "/asset-types", token=token, json={"name": name})
+        return AssetTypeOut.model_validate(payload)
+
+    def set_asset_type(self, token: str, asset_id: UUID, asset_type_id: int) -> AssetDetail:
+        payload = self._request("PUT", f"/assets/{asset_id}/type", token=token, json={"asset_type_id": asset_type_id})
+        return AssetDetail.model_validate(payload)
+
+    def get_persons(self, token: str) -> list[PersonOut]:
+        payload = self._request("GET", "/persons", token=token)
+        return [PersonOut.model_validate(item) for item in payload]
+
+    def set_responsible(self, token: str, asset_id: UUID, person_id: UUID) -> AssetDetail:
+        payload = self._request("PUT", f"/assets/{asset_id}/responsible", token=token, json={"person_id": str(person_id)})
+        return AssetDetail.model_validate(payload)
+
+    def get_rooms(self, token: str, zone_code: str) -> list[RoomOut]:
+        payload = self._request("GET", "/rooms", token=token, params={"zone": zone_code})
+        return [RoomOut.model_validate(room) for room in payload]
+
+    def create_room(self, token: str, zone_code: str, room_number: str, name: str | None) -> RoomOut:
+        body: dict[str, object] = {"zone_code": zone_code, "room_number": room_number}
+        if name:
+            body["name"] = name
+        payload = self._request("POST", "/rooms", token=token, json=body)
+        return RoomOut.model_validate(payload)
+
     def start_session(self, token: str, zone_code: str) -> SessionOut:
         payload = self._request("POST", "/sessions", token=token, json={"zone_code": zone_code})
         return SessionOut.model_validate(payload)
 
-    def post_scan(self, token: str, session_id: UUID, raw_code: str) -> ScanOut:
+    def post_scan(
+        self,
+        token: str,
+        session_id: UUID,
+        raw_code: str,
+        quantity: int = 1,
+        room_id: UUID | None = None,
+    ) -> ScanOut:
+        body: dict[str, object] = {"raw_code": raw_code, "quantity": quantity}
+        if room_id:
+            body["room_id"] = str(room_id)
         payload = self._request(
-            "POST", f"/sessions/{session_id}/scans", token=token, json={"raw_code": raw_code}
+            "POST", f"/sessions/{session_id}/scans", token=token, json=body
         )
         return ScanOut.model_validate(payload)
+
+    def undo_scan(self, token: str, session_id: UUID, scan_id: UUID) -> ScanOut:
+        payload = self._request("POST", f"/sessions/{session_id}/scans/{scan_id}/undo", token=token)
+        return ScanOut.model_validate(payload)
+
+    def close_session(self, token: str, session_id: UUID) -> SessionOut:
+        payload = self._request("POST", f"/sessions/{session_id}/close", token=token)
+        return SessionOut.model_validate(payload)
 
 
 #: a hamis kliens állománya; a leltárszámok szándékosan körzetenként különböznek
@@ -141,6 +223,8 @@ FAKE_ASSETS = [
         quantity=1,
         activated_on=date(2023, 1, 15),
         serial_number="SN12345",
+        asset_type="Számítógép",
+        responsible="Kovács Anna",
     ),
     AssetListItem(
         id=uuid4(),
@@ -152,6 +236,8 @@ FAKE_ASSETS = [
         quantity=30,
         activated_on=date(2020, 5, 10),
         serial_number=None,
+        asset_type="Bútor",
+        responsible=None,
     ),
     AssetListItem(
         id=uuid4(),
@@ -163,6 +249,8 @@ FAKE_ASSETS = [
         quantity=2,
         activated_on=date(2019, 9, 1),
         serial_number="OSZ-99",
+        asset_type="Egyéb",
+        responsible="Nagy Béla",
     ),
     AssetListItem(
         id=uuid4(),
@@ -174,6 +262,8 @@ FAKE_ASSETS = [
         quantity=1,
         activated_on=None,
         serial_number=None,
+        asset_type="Bútor",
+        responsible=None,
     ),
 ]
 
@@ -184,6 +274,23 @@ class FakeApiClient:
     def __init__(self, base_url: str):
         self.base_url = base_url
         self._session_zones: dict[UUID, str] = {}
+        self._asset_types = [
+            AssetTypeOut(id=1, name="Bútor"),
+            AssetTypeOut(id=2, name="Számítógép"),
+            AssetTypeOut(id=3, name="Egyéb"),
+        ]
+        self._persons = [
+            PersonOut(id=uuid4(), name="Kovács Anna", org_unit="IK"),
+            PersonOut(id=uuid4(), name="Nagy Béla", org_unit="MK"),
+        ]
+        self._rooms = {
+            "261": [
+                RoomOut(id=uuid4(), zone_code="261", room_number="I-101", name="Iroda", label="I-101 · Iroda"),
+            ],
+            "262": [
+                RoomOut(id=uuid4(), zone_code="262", room_number="G-202", name="Labor", label="G-202 · Labor"),
+            ],
+        }
 
     def login(self, request: LoginRequest) -> LoginResponse:
         time.sleep(1)
@@ -213,6 +320,9 @@ class FakeApiClient:
         main_only: bool = False,
         multi_only: bool = False,
         field: str = "mind",
+        asset_type_id: int | None = None,
+        room_id: UUID | None = None,
+        person_id: UUID | None = None,
     ) -> AssetPage:
         time.sleep(0.5)
         items = FAKE_ASSETS
@@ -224,7 +334,7 @@ class FakeApiClient:
             items = [i for i in items if i.sub_number == 0]
         if multi_only:
             items = [i for i in items if i.quantity > 1]
-
+        
         return AssetPage(items=items, total=len(items), page=page, page_size=page_size)
 
     def get_asset(self, token: str, asset_id: UUID) -> AssetDetail:
@@ -243,7 +353,50 @@ class FakeApiClient:
             serial_number=item.serial_number,
             codes=[],
             accessories=[],
+            asset_type_id=1,
+            room=None,
+            responsible=None,
         )
+
+    def get_asset_types(self, token: str) -> list[AssetTypeOut]:
+        time.sleep(0.2)
+        return self._asset_types
+
+    def create_asset_type(self, token: str, name: str) -> AssetTypeOut:
+        time.sleep(0.2)
+        if any(t.name.lower() == name.lower() for t in self._asset_types):
+            raise ValueError("Ilyen nevű típus már van.")
+        new_type = AssetTypeOut(id=len(self._asset_types) + 1, name=name)
+        self._asset_types.append(new_type)
+        return new_type
+
+    def set_asset_type(self, token: str, asset_id: UUID, asset_type_id: int) -> AssetDetail:
+        time.sleep(0.2)
+        return self.get_asset(token, asset_id)
+
+    def get_persons(self, token: str) -> list[PersonOut]:
+        time.sleep(0.2)
+        return self._persons
+
+    def set_responsible(self, token: str, asset_id: UUID, person_id: UUID) -> AssetDetail:
+        time.sleep(0.2)
+        return self.get_asset(token, asset_id)
+
+    def get_rooms(self, token: str, zone_code: str) -> list[RoomOut]:
+        time.sleep(0.2)
+        return self._rooms.get(zone_code, [])
+
+    def create_room(self, token: str, zone_code: str, room_number: str, name: str | None) -> RoomOut:
+        time.sleep(0.2)
+        new_room = RoomOut(
+            id=uuid4(),
+            zone_code=zone_code,
+            room_number=room_number,
+            name=name,
+            label=f"{room_number} · {name}" if name else room_number,
+        )
+        self._rooms.setdefault(zone_code, []).append(new_room)
+        return new_room
 
     def start_session(self, token: str, zone_code: str) -> SessionOut:
         time.sleep(0.2)
@@ -254,9 +407,17 @@ class FakeApiClient:
             zone_code=zone_code,
             period_name="2026. évi leltár",
             started_at=datetime.now(UTC),
+            closed_at=None,
         )
 
-    def post_scan(self, token: str, session_id: UUID, raw_code: str) -> ScanOut:
+    def post_scan(
+        self,
+        token: str,
+        session_id: UUID,
+        raw_code: str,
+        quantity: int = 1,
+        room_id: UUID | None = None,
+    ) -> ScanOut:
         time.sleep(0.1)
         active_zone = self._session_zones.get(session_id)
         if active_zone is None:
@@ -279,8 +440,37 @@ class FakeApiClient:
         return ScanOut(
             id=uuid4(),
             raw_code=raw_code,
-            result=result,
+            result=result,  # type: ignore[arg-type]
             scanned_at=datetime.now(UTC),
             asset=asset,
             message=message,
+            quantity=quantity,
+            room=None,
+            expected=asset.quantity if asset else None,
+            counted=quantity if asset else None,
+            compensates_scan_id=None,
+        )
+
+    def undo_scan(self, token: str, session_id: UUID, scan_id: UUID) -> ScanOut:
+        time.sleep(0.1)
+        return ScanOut(
+            id=uuid4(),
+            raw_code="L-1001",
+            result="FOUND",
+            scanned_at=datetime.now(UTC),
+            asset=None,
+            message="Visszavonva: L-1001, 1 db.",
+            quantity=-1,
+            room=None,
+            compensates_scan_id=scan_id,
+        )
+
+    def close_session(self, token: str, session_id: UUID) -> SessionOut:
+        time.sleep(0.2)
+        return SessionOut(
+            id=session_id,
+            zone_code="261",
+            period_name="2026. évi leltár",
+            started_at=datetime.now(UTC),
+            closed_at=datetime.now(UTC),
         )
