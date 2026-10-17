@@ -78,6 +78,10 @@ def list_assets(
     ),
     q: str | None = Query(default=None, description="Szabad szöveges keresőkifejezés."),
     field: SearchField = "mind",
+    asset_type_id: int | None = Query(
+        default=None,
+        description="Szűrés eszköztípus azonosítója alapján.",
+    ),
     main_only: bool = Query(
         default=False,
         description="Csak főeszközök, vagyis alszám 0.",
@@ -114,6 +118,9 @@ def list_assets(
             )
         zone_id = inventory_zone.id
         filters.append(Asset.zone_id == zone_id)
+
+    if asset_type_id is not None:
+        filters.append(Asset.asset_type_id == asset_type_id)
 
     if main_only:
         filters.append(Asset.sub_number == 0)
