@@ -12,7 +12,6 @@ from leltariv_contracts.assets import (
 from leltariv_domain.normalization import normalize_code, normalize_text
 from leltariv_infrastructure.db.models import Asset, AssetCode, AssetType, InventoryZone
 from leltariv_infrastructure.db.session import get_db_session
-from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -256,42 +255,3 @@ def get_asset(
 ) -> AssetDetail:
     """A bejelentkezett felhasználónak visszaadja az eszköz adatlapját."""
     return asset_detail(session, asset_id)
-
-
-class AssetTypeUpdate(BaseModel):
-    asset_type_id: int
-
-
-@router.put(
-    "/assets/{asset_id}/type",
-    response_model=AssetDetail,
-    summary="Eszköz típusának módosítása",
-)
-def update_asset_type(
-    asset_id: UUID,
-    payload: AssetTypeUpdate,
-    _current_user: object = Depends(require_current_user),  # noqa: B008
-    session: Session = Depends(get_db_session),  # noqa: B008
-) -> AssetDetail:
-    """Beállítja az eszköz típusát, majd visszaadja a frissített adatlapot."""
-    asset = session.get(Asset, asset_id)
-
-    if asset is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="A megadott eszköz nem található.",
-        )
-
-    asset_type = session.get(AssetType, payload.asset_type_id)
-
-    if asset_type is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="A megadott eszköztípus nem található.",
-        )
-
-    asset.asset_type_id = asset_type.id
-    session.commit()
-    session.refresh(asset)
-
-    return asset_detail(session, asset.id)
