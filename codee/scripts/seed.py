@@ -27,6 +27,7 @@ from leltariv_infrastructure.db.models import (
     ImportBatch,
     InventoryPeriod,
     InventoryZone,
+    Room,
 )
 from leltariv_infrastructure.db.session import SessionLocal
 from sqlalchemy import func, select, update
@@ -42,6 +43,15 @@ ZONE_NAMES = {
     "261": "Leltárkörzet 261",
     "262": "Leltárkörzet 262",
 }
+
+DEMO_ROOMS: tuple[tuple[str, str, str], ...] = (
+    ("261", "I-101", "Iroda"),
+    ("261", "I-217", "Labor"),
+    ("261", "I-220", "Raktár"),
+    ("262", "G-012", "Műhely"),
+    ("262", "G-105", "Tárgyaló"),
+    ("262", "G-210", "Labor"),
+)
 
 
 @dataclass(frozen=True)
@@ -181,6 +191,35 @@ def get_or_create_zone(session: Session, code: str) -> InventoryZone:
     session.add(zone)
     session.flush()
     return zone
+
+
+def seed_demo_rooms(session: Session) -> int:
+    """A hiányzó demóhelyiségeket létrehozza, a meglévőket nem módosítja."""
+    created = 0
+
+    for zone_code, room_number, name in DEMO_ROOMS:
+        zone = get_or_create_zone(session, zone_code)
+        existing = session.scalar(
+            select(Room).where(
+                Room.zone_id == zone.id,
+                Room.room_number == room_number,
+            )
+        )
+        if existing is not None:
+            continue
+
+        session.add(
+            Room(
+                id=uuid4(),
+                zone_id=zone.id,
+                room_number=room_number,
+                name=name,
+            )
+        )
+        session.flush()
+        created += 1
+
+    return created
 
 
 def get_or_create_asset_type(
@@ -420,14 +459,17 @@ def source_paths(source_dir: Path) -> list[Path]:
 def main() -> None:
     """A teljes fejlesztői seed futtatása."""
     source_dir = get_source_dir()
-
     session = SessionLocal()
 
     try:
-        # Az indító minden induláskor meghívja: ha már van adat, ne próbálja újra betölteni.
         loaded = session.scalar(select(func.count()).select_from(Asset)) or 0
+
         if loaded:
-            print(f"Az adatbázis már be van töltve ({loaded} eszköz), a seed kihagyva.")
+            rooms_created = seed_demo_rooms(session)
+            session.commit()
+
+            print(f"Az adatbázis már be van töltve ({loaded} eszköz), az Excel-import kihagyva.")
+            print(f"Új demóhelyiségek: {rooms_created}.")
             return
 
         get_or_create_period(session)
@@ -435,6 +477,7 @@ def main() -> None:
 
         totals = [seed_file(session, path) for path in source_paths(source_dir)]
         linked = link_accessories(session)
+        rooms_created = seed_demo_rooms(session)
 
         session.commit()
 
@@ -446,6 +489,7 @@ def main() -> None:
             f"Seed kész: {rows_ok}/{rows_read} eszköz, {rows_failed} hibás sor, "
             f"{linked} tartozék a főeszközéhez kötve."
         )
+        print(f"Új demóhelyiségek: {rooms_created}.")
     except Exception:
         session.rollback()
         raise
