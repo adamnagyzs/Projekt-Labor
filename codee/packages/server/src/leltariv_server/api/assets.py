@@ -78,6 +78,10 @@ def list_assets(
     ),
     q: str | None = Query(default=None, description="Szabad szöveges keresőkifejezés."),
     field: SearchField = "mind",
+    asset_type_id: int | None = Query(
+        default=None,
+        description="Szűrés eszköztípus azonosítója alapján.",
+    ),
     main_only: bool = Query(
         default=False,
         description="Csak főeszközök, vagyis alszám 0.",
@@ -114,6 +118,9 @@ def list_assets(
             )
         zone_id = inventory_zone.id
         filters.append(Asset.zone_id == zone_id)
+
+    if asset_type_id is not None:
+        filters.append(Asset.asset_type_id == asset_type_id)
 
     if main_only:
         filters.append(Asset.sub_number == 0)
@@ -169,16 +176,8 @@ def list_assets(
     )
 
 
-@router.get(
-    "/assets/{asset_id}",
-    response_model=AssetDetail,
-    summary="Egy eszköz részletes adatlapja",
-)
-def get_asset(
-    asset_id: UUID,
-    _current_user: object = Depends(require_current_user),  # noqa: B008
-    session: Session = Depends(get_db_session),  # noqa: B008
-) -> AssetDetail:
+def asset_detail(session: Session, asset_id: UUID) -> AssetDetail:
+    """Az eszköz adatlapját állítja össze a GET és PUT végpontok számára."""
     row = session.execute(
         select(Asset, InventoryZone.code, AssetType.name)
         .join(InventoryZone, Asset.zone_id == InventoryZone.id)
@@ -198,7 +197,11 @@ def get_asset(
         session.execute(
             select(AssetCode)
             .where(AssetCode.asset_id == asset.id)
-            .order_by(AssetCode.is_primary.desc(), AssetCode.code_type, AssetCode.code)
+            .order_by(
+                AssetCode.is_primary.desc(),
+                AssetCode.code_type,
+                AssetCode.code,
+            )
         )
         .scalars()
         .all()
@@ -224,7 +227,11 @@ def get_asset(
     accessory_primary_codes = primary_inventory_numbers(session, accessory_ids)
 
     accessories = [
-        asset_list_item(accessory, accessory_zone_code, accessory_primary_codes)
+        asset_list_item(
+            accessory,
+            accessory_zone_code,
+            accessory_primary_codes,
+        )
         for accessory, accessory_zone_code in accessory_rows
     ]
 
@@ -241,3 +248,17 @@ def get_asset(
         codes=codes,
         accessories=accessories,
     )
+
+
+@router.get(
+    "/assets/{asset_id}",
+    response_model=AssetDetail,
+    summary="Egy eszköz részletes adatlapja",
+)
+def get_asset(
+    asset_id: UUID,
+    _current_user: object = Depends(require_current_user),  # noqa: B008
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> AssetDetail:
+    """A bejelentkezett felhasználónak visszaadja az eszköz adatlapját."""
+    return asset_detail(session, asset_id)
