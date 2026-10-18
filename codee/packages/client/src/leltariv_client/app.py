@@ -261,6 +261,12 @@ class MainWindow(QMainWindow):
         self.room_combo.currentIndexChanged.connect(self.trigger_search)
 
         self.person_combo = QComboBox()
+        # A szűrők a teljes nevet mutassák, ne csak az elejét („Teszt").
+        for combo in (self.type_combo, self.room_combo, self.person_combo):
+            combo.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+            )
+            combo.setMinimumContentsLength(10)
         self.person_combo.addItem("Mind", None)
         self.person_combo.currentIndexChanged.connect(self.trigger_search)
 

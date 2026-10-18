@@ -259,9 +259,12 @@ def seed_demo_responsibles(session: Session) -> tuple[int, int]:
     if session.scalar(select(func.count()).select_from(AssetResponsible)):
         return created, 0
 
+    # Kézzelfogható eszközök kapjanak felelőst (bútor, gép, műszer), ne a licencek, amelyek az
+    # eszközszám szerinti elejét adják a 262-nek, és az „Egyéb" típusba esnek.
     assets = session.scalars(
         select(Asset)
-        .where(Asset.zone_id == zone.id, Asset.sub_number == 0)
+        .join(AssetType, Asset.asset_type_id == AssetType.id)
+        .where(Asset.zone_id == zone.id, Asset.sub_number == 0, AssetType.name != "Egyéb")
         .order_by(Asset.asset_number)
         .limit(DEMO_RESPONSIBLE_COUNT)
     ).all()
