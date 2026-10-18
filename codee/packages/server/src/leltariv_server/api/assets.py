@@ -10,12 +10,22 @@ from leltariv_contracts.assets import (
     CodeType,
 )
 from leltariv_domain.normalization import normalize_code, normalize_text
-from leltariv_infrastructure.db.models import Asset, AssetCode, AssetType, InventoryZone
+from leltariv_infrastructure.db.models import (
+    Asset,
+    AssetCode,
+    AssetType,
+    InventoryPeriod,
+    InventorySession,
+    InventoryZone,
+    Room,
+    Scan,
+)
 from leltariv_infrastructure.db.session import get_db_session
-from sqlalchemy import func, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
+from leltariv_server.api.rooms import room_label
 from leltariv_server.dependencies import require_current_user
 
 router = APIRouter(prefix="/api/v1", tags=["assets"])
@@ -66,6 +76,26 @@ def asset_list_item(
     )
 
 
+def room_scans() -> Select[tuple[Scan]]:
+    """Az aktív időszak helyiséggel rögzített, vissza nem vont beolvasásai.
+
+    Az eszköz helye nem az eszköz mezője, hanem a naplóból számolt érték: ahol utoljára
+    beolvasták. A visszavonó sor és az, amit visszavontak, nem számít helymegállapításnak.
+    """
+    undone = select(Scan.compensates_scan_id).where(Scan.compensates_scan_id.is_not(None))
+    return (
+        select(Scan)
+        .join(InventorySession, Scan.session_id == InventorySession.id)
+        .join(InventoryPeriod, InventorySession.period_id == InventoryPeriod.id)
+        .where(
+            Scan.room_id.is_not(None),
+            Scan.compensates_scan_id.is_(None),
+            Scan.id.not_in(undone),
+            InventoryPeriod.state == "ACTIVE",
+        )
+    )
+
+
 @router.get(
     "/assets",
     response_model=AssetPage,
@@ -81,6 +111,10 @@ def list_assets(
     asset_type_id: int | None = Query(
         default=None,
         description="Szűrés eszköztípus azonosítója alapján.",
+    ),
+    room_id: UUID | None = Query(  # noqa: B008
+        default=None,
+        description="Az aktív időszakban ebben a helyiségben beolvasott eszközök.",
     ),
     main_only: bool = Query(
         default=False,
@@ -121,6 +155,10 @@ def list_assets(
 
     if asset_type_id is not None:
         filters.append(Asset.asset_type_id == asset_type_id)
+
+    if room_id is not None:
+        in_room = room_scans().where(Scan.room_id == room_id).with_only_columns(Scan.asset_id)
+        filters.append(Asset.id.in_(in_room))
 
     if main_only:
         filters.append(Asset.sub_number == 0)
@@ -235,6 +273,11 @@ def asset_detail(session: Session, asset_id: UUID) -> AssetDetail:
         for accessory, accessory_zone_code in accessory_rows
     ]
 
+    last_room_scan = session.scalars(
+        room_scans().where(Scan.asset_id == asset.id).order_by(Scan.scanned_at.desc()).limit(1)
+    ).first()
+    room = session.get(Room, last_room_scan.room_id) if last_room_scan is not None else None
+
     return AssetDetail(
         id=asset.id,
         asset_number=asset.asset_number,
@@ -245,6 +288,8 @@ def asset_detail(session: Session, asset_id: UUID) -> AssetDetail:
         activated_on=asset.activated_on,
         serial_number=asset.serial_number,
         asset_type=asset_type_name,
+        asset_type_id=asset.asset_type_id,
+        room=room_label(room) if room is not None else None,
         codes=codes,
         accessories=accessories,
     )
