@@ -38,6 +38,23 @@ jobs:
       # a CI mas patch-verzion futna, mint a mi gepeink. Igy a .python-version
       # szerinti managed interpreter jon, es cache-elheto is.
       UV_PYTHON_PREFERENCE: only-managed
+      # A migracio-proba ide csatlakozik; a jelszo csak a futtaton elo, eldobhato kontenere.
+      DATABASE_URL: postgresql+psycopg://postgres:leltar2026@localhost:5432/leltariv
+
+    # Ugyanaz a Postgres-verzio, mint a docker-compose.yml-ben.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: leltariv
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: leltar2026
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
 
     # A workspace a codee/ alatt van, nem a repo gyokereben.
     defaults:
@@ -87,31 +104,20 @@ jobs:
         if: '!cancelled()'
         run: uv run pyright
 
+      # Oda-vissza: ha egy migracio downgrade()-je hibas (az 5-6. alkalom elott pont
+      # ilyen volt), itt derul ki, nem az atadaskor.
+      - name: Migracio oda-vissza
+        if: '!cancelled()'
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+
       - name: Tesztek
         if: '!cancelled()'
         run: uv run pytest -q
 
 # ---------------------------------------------------------------------------
-# Amikor jonnek az adatbazis-tesztek (Dani), ez a blokk kerul a check job ala,
-# a `env:` es a `defaults:` kozott:
-#
-#     services:
-#       postgres:
-#         image: postgres:17
-#         env:
-#           POSTGRES_DB: leltariv
-#           POSTGRES_USER: postgres
-#           POSTGRES_PASSWORD: leltar2026
-#         ports: ["5432:5432"]
-#         options: >-
-#           --health-cmd pg_isready
-#           --health-interval 5s
-#           --health-timeout 5s
-#           --health-retries 12
-#
-# es az env-be:
-#     DATABASE_URL: postgresql+psycopg://postgres:leltar2026@localhost:5432/leltariv
-#
 # Amikor jon a PyInstaller + Inno Setup telepito, akkor kell egy masodik job
 # windows-latest futtaton. Addig nem, mert csak lassitana.
 # ---------------------------------------------------------------------------
