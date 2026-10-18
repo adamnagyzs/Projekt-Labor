@@ -125,3 +125,17 @@ ORDER BY
     inventory_zone.code,
     tipus,
     asset_type.id;
+
+-- 6. Felelősönként hány eszköz tartozik hozzá most, és hány volt valaha?
+-- A felelős-kapcsolat időbélyeges: váltáskor a régi sor valid_to-t kap, nem törlődik.
+-- A "most" a nyitott sorokat számolja, a "valaha" a lezártakat is.
+
+SELECT
+    person.name AS felelos,
+    COUNT(asset_responsible.id) FILTER (WHERE asset_responsible.valid_to IS NULL) AS most,
+    COUNT(asset_responsible.id) AS valaha
+FROM person
+LEFT JOIN asset_responsible
+    ON asset_responsible.person_id = person.id
+GROUP BY person.name
+ORDER BY person.name;
