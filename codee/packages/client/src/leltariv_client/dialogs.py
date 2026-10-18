@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
     QComboBox,
@@ -27,6 +29,10 @@ class AssetDetailDialog(QDialog):
         self.asset_id = asset_id
         self.loaded_accessories = []
         self.current_detail = None
+        #: mentettek-e az adatlapon; a lista ebből tudja, kell-e újratöltenie
+        self.saved = False
+        #: az „Új típus…" után ezt a típust választjuk ki és mentjük, amikor a lista visszaér
+        self.pending_type_id: int | None = None
 
         self.setWindowTitle("Eszköz adatlapja")
         self.resize(550, 650)
@@ -98,18 +104,42 @@ class AssetDetailDialog(QDialog):
         worker.signals.error.connect(self.on_error)
         QThreadPool.globalInstance().start(worker)
 
-    def on_types_loaded(self, types):
+    def _fill_types(self, types):
         self.type_combo.clear()
         for t in types:
             self.type_combo.addItem(t.name, t.id)
+
+    def on_types_loaded(self, types):
+        self._fill_types(types)
         # Ha a típusok megvannak, betöltjük az eszközt is
         self.load_asset_details()
 
     def on_persons_loaded(self, persons):
         self.resp_combo.clear()
         self.resp_combo.addItem("— nincs —", None)
+        # Szövegként tároljuk: a QComboBox.findData a UUID-ot nem egyenlőség, hanem azonosság
+        # szerint keresné, és a szerver válaszából mindig új objektum jön.
         for p in persons:
-            self.resp_combo.addItem(p.name, p.id)
+            self.resp_combo.addItem(p.name, str(p.id))
+        self._select_current()
+
+    def _select_current(self):
+        """A legördülőkben a jelenlegi típus és felelős.
+
+        A személyek és az adatlap két külön kérés, bármelyik érkezhet előbb; ezért mindkét
+        válasz után lefut, és csak azt állítja, amihez már minden adat megvan.
+        """
+        detail = self.current_detail
+        if detail is None:
+            return
+        if detail.asset_type_id is not None:
+            idx = self.type_combo.findData(detail.asset_type_id)
+            if idx >= 0:
+                self.type_combo.setCurrentIndex(idx)
+        if self.resp_combo.count():
+            person_id = str(detail.responsible.id) if detail.responsible is not None else None
+            idx = self.resp_combo.findData(person_id) if person_id else 0
+            self.resp_combo.setCurrentIndex(max(idx, 0))
 
     def on_loaded(self, detail):
         self.current_detail = detail
@@ -121,27 +151,8 @@ class AssetDetailDialog(QDialog):
             f"Aktiválva: {detail.activated_on or '-'}"
         )
 
-        # Helyiség beállítása
-        if getattr(detail, "room", None):
-            self.lbl_room.setText(detail.room)
-        else:
-            self.lbl_room.setText("még nem olvasták be")
-
-        # Típus kiválasztása a comboboxban
-        type_id = getattr(detail, "asset_type_id", None)
-        if type_id is not None:
-            idx = self.type_combo.findData(type_id)
-            if idx >= 0:
-                self.type_combo.setCurrentIndex(idx)
-
-        # Felelős kiválasztása a comboboxban
-        responsible_obj = getattr(detail, "responsible", None)
-        if responsible_obj is not None and hasattr(responsible_obj, "id"):
-            idx = self.resp_combo.findData(responsible_obj.id)
-            if idx >= 0:
-                self.resp_combo.setCurrentIndex(idx)
-        else:
-            self.resp_combo.setCurrentIndex(0)
+        self.lbl_room.setText(detail.room or "még nem olvasták be")
+        self._select_current()
 
         self.codes_table.setRowCount(len(detail.codes))
         for row, code in enumerate(detail.codes):
@@ -166,9 +177,10 @@ class AssetDetailDialog(QDialog):
         QThreadPool.globalInstance().start(worker)
 
     def on_type_saved(self, updated_detail):
-        QMessageBox.information(self, "Siker", "A típus sikeresen mentve.")
+        # Az adatlap nyitva marad, hogy ugyanott a felelőst is be lehessen állítani.
+        self.saved = True
         self.on_loaded(updated_detail)
-        self.accept()  # Jelzi a hívónak, hogy frissíteni kell a listát
+        QMessageBox.information(self, "Siker", "A típus sikeresen mentve.")
 
     def create_new_type(self):
         text, ok = QInputDialog.getText(self, "Új típus felvétele", "Add meg az új típust:")
@@ -179,34 +191,37 @@ class AssetDetailDialog(QDialog):
             QThreadPool.globalInstance().start(worker)
 
     def on_new_type_created(self, new_type):
-        # Újratöltjük a típusokat, és beállítjuk az újat
-        def refresh_types(types):
-            self.type_combo.clear()
-            for t in types:
-                self.type_combo.addItem(t.name, t.id)
-            idx = self.type_combo.findData(new_type.id)
-            if idx >= 0:
-                self.type_combo.setCurrentIndex(idx)
-            self.save_asset_type()
-
+        # Kötött metódus kell, nem beágyazott függvény: csak így fut a válasz a felületi szálon.
+        self.pending_type_id = new_type.id
         worker = Worker(self.api.get_asset_types, self.token)
-        worker.signals.finished.connect(refresh_types)
+        worker.signals.finished.connect(self.on_types_reloaded)
+        worker.signals.error.connect(self.on_error)
         QThreadPool.globalInstance().start(worker)
+
+    def on_types_reloaded(self, types):
+        self._fill_types(types)
+        idx = self.type_combo.findData(self.pending_type_id)
+        self.pending_type_id = None
+        if idx >= 0:
+            self.type_combo.setCurrentIndex(idx)
+            self.save_asset_type()
 
     def save_responsible(self):
         selected_person_id = self.resp_combo.currentData()
         if selected_person_id is None:
             QMessageBox.warning(self, "Figyelmeztetés", "Kérlek válassz ki egy felelőst!")
             return
-        worker = Worker(self.api.set_responsible, self.token, self.asset_id, selected_person_id)
+        worker = Worker(
+            self.api.set_responsible, self.token, self.asset_id, UUID(selected_person_id)
+        )
         worker.signals.finished.connect(self.on_resp_saved)
         worker.signals.error.connect(self.on_error)
         QThreadPool.globalInstance().start(worker)
 
     def on_resp_saved(self, updated_detail):
-        QMessageBox.information(self, "Siker", "A felelős sikeresen mentve.")
+        self.saved = True
         self.on_loaded(updated_detail)
-        self.accept()
+        QMessageBox.information(self, "Siker", "A felelős sikeresen mentve.")
 
     def on_error(self, err_msg):
         self.info_label.setText("Hiba történt a művelet során.")

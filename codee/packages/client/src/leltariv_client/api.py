@@ -97,6 +97,7 @@ class HttpApiClient:
         if response.is_success:
             return response.json()
 
+        # A FastAPI hibaválasza {"detail": "..."} — ha mégsem az jön, a státuszt mutatjuk.
         try:
             detail = response.json().get("detail")
         except ValueError:
@@ -133,6 +134,7 @@ class HttpApiClient:
             params["zone"] = zone
         if q:
             params["q"] = q
+        # Csak a bekapcsolt szűrő megy át; a szerver alapértéke amúgy is false.
         if main_only:
             params["main_only"] = "true"
         if multi_only:

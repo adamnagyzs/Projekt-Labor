@@ -125,6 +125,8 @@ class LoginDialog(QDialog):
         self.setFixedSize(350, 250)
 
         self.config_path = get_config_path()
+        # 127.0.0.1, nem localhost: Windowson a localhost előbb IPv6-on próbál, és minden
+        # új kapcsolat (5 mp tétlenség után) 2 másodpercet vár, mielőtt IPv4-re vált.
         saved_url = "http://127.0.0.1:8000"
         saved_email = ""
         if self.config_path.exists():
@@ -133,6 +135,7 @@ class LoginDialog(QDialog):
                 saved_url = conf.get("url", saved_url)
                 saved_email = conf.get("email", saved_email)
             except (OSError, ValueError):
+                # sérült vagy olvashatatlan config: az alapértelmezésekkel indulunk
                 pass
 
         layout = QVBoxLayout(self)
@@ -231,6 +234,7 @@ class MainWindow(QMainWindow):
         self.search_input.setPlaceholderText("Keresés...")
         self.search_input.textChanged.connect(self.trigger_search)
 
+        # Hol keressen a kereső; az adat a szerver `field` paramétere.
         self.search_field = QComboBox()
         for label, value in (
             ("Mindenhol", "mind"),
@@ -282,6 +286,9 @@ class MainWindow(QMainWindow):
         self.table = QTableView()
         self.model = AssetTableModel()
 
+        # A proxy csak rendez. Szűrni a szerver szűr, mert az a megnevezés mellett a
+        # kódokban is keres — a proxy viszont csak a megnevezés oszlopot látja, tehát
+        # egy leltárszámra keresve kidobná a szerver találatait.
         self.proxy_model = QSortFilterProxyModel()
         self.proxy_model.setSourceModel(self.model)
 
@@ -327,7 +334,9 @@ class MainWindow(QMainWindow):
         source_index = self.proxy_model.mapToSource(index)
         item = self.model.item_at(source_index.row())
         dlg = AssetDetailDialog(self.api, self.token, item.id, self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
+        dlg.exec()
+        # Csak akkor töltünk újra, ha az adatlapon mentettek: a Típus és Felelős oszlop változott.
+        if dlg.saved:
             self.load_page()
 
     def go_previous_page(self):
@@ -393,6 +402,9 @@ class MainWindow(QMainWindow):
     def on_zones_loaded(self, zones):
         for z in zones:
             self.zone_combo.addItem(z.code)
+        # A körzetek hozzáadása nem váltja meg a „Mind" kijelölést, így az on_zone_changed
+        # nem fut le: az első oldalt itt kell kérni, különben belépés után üres a lista.
+        self.trigger_search()
 
     def on_asset_types_loaded(self, types):
         for t in types:
@@ -407,6 +419,8 @@ class MainWindow(QMainWindow):
             self.room_combo.addItem(r.label, r.id)
 
     def on_assets_loaded(self, page_data):
+        # Gépelés vagy szűrőváltás közben több kérés is úton lehet, és nem sorrendben
+        # érnek vissza: csak a legutoljára elküldött válaszát mutatjuk.
         if self.sender() is not self.latest_load:
             return
         self.model.update_data(page_data.items)
@@ -438,6 +452,8 @@ def main():
     app = QApplication(sys.argv)
     qdarktheme.setup_theme("auto")
 
+    # Hibás belépés után az ablak visszajön (cím és e-mail marad, a jelszó törlődik);
+    # csak a Mégse lép ki. Különben egy elgépelt jelszó az indítóval a szervert is leállítaná.
     dialog = LoginDialog()
     while dialog.exec() == QDialog.DialogCode.Accepted:
         dialog.save_config()
