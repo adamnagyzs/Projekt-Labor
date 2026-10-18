@@ -141,6 +141,7 @@ def create_scan(
         result=result,
         scanned_at=scan.scanned_at,
         asset=asset_out,
+        quantity=scan.quantity_delta,
         message=scan_message(
             result,
             raw_code=request.raw_code,

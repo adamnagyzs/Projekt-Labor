@@ -10,6 +10,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -170,13 +171,54 @@ class AssetCode(Base):
 
 class Room(Base):
     __tablename__ = "room"
+    __table_args__ = (UniqueConstraint("zone_id", "room_number", name="uq_room_zone_number"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     zone_id: Mapped[int] = mapped_column(ForeignKey("inventory_zone.id"), nullable=False)
     building: Mapped[str | None] = mapped_column(Text, nullable=True)
     floor: Mapped[str | None] = mapped_column(Text, nullable=True)
-    room_number: Mapped[str | None] = mapped_column(Text, nullable=True)
+    room_number: Mapped[str] = mapped_column(Text, nullable=False)
     name: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Person(Base):
+    """Felelős személy. Személyes adat: a demóállományban csak kitalált nevek szerepelnek."""
+
+    __tablename__ = "person"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    org_unit: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AssetResponsible(Base):
+    """Ki felelt egy eszközért és mikor. Váltáskor a régi sor lezárul, nem íródik felül."""
+
+    __tablename__ = "asset_responsible"
+    __table_args__ = (
+        CheckConstraint(
+            "valid_to IS NULL OR valid_to >= valid_from",
+            name="ck_asset_responsible_interval",
+        ),
+        # egy eszköznek egyszerre legfeljebb egy nyitott felelőse lehet
+        Index(
+            "uq_asset_responsible_open",
+            "asset_id",
+            unique=True,
+            postgresql_where=text("valid_to IS NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    asset_id: Mapped[UUID] = mapped_column(ForeignKey("asset.id"), nullable=False)
+    person_id: Mapped[UUID] = mapped_column(ForeignKey("person.id"), nullable=False)
+    valid_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    assigned_by: Mapped[UUID | None] = mapped_column(ForeignKey("app_user.id"), nullable=True)
 
 
 class AppUser(Base):
@@ -244,6 +286,13 @@ class Scan(Base):
             "verification IN ('DIRECT', 'INHERITED')",
             name="ck_scan_verification",
         ),
+        # negatív darab csak visszavonásnál lehet, és egy sort csak egyszer lehet visszavonni
+        CheckConstraint(
+            "(compensates_scan_id IS NULL AND quantity_delta > 0)"
+            " OR (compensates_scan_id IS NOT NULL AND quantity_delta < 0)",
+            name="ck_scan_quantity_sign",
+        ),
+        UniqueConstraint("compensates_scan_id", name="uq_scan_compensates"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)

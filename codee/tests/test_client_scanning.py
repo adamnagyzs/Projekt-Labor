@@ -41,6 +41,7 @@ class CountingApi:
             result="UNKNOWN_CODE",
             scanned_at=now(),
             message=f"Ismeretlen kód: {raw_code}.",
+            quantity=1,
         )
 
 

@@ -283,4 +283,5 @@ class FakeApiClient:
             scanned_at=datetime.now(UTC),
             asset=asset,
             message=message,
+            quantity=1,
         )
