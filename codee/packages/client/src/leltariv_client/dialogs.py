@@ -1,10 +1,9 @@
-from uuid import UUID
-from PySide6.QtCore import QThreadPool, Qt
+from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
-    QHeaderView,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QListWidget,

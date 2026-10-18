@@ -1,11 +1,10 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from leltariv_contracts.assets import AssetDetail
+from leltariv_contracts.assets import AssetDetail, AssetTypeCreate, AssetTypeOut, AssetTypeSet
 from leltariv_domain.normalization import normalize_text
 from leltariv_infrastructure.db.models import Asset, AssetType
 from leltariv_infrastructure.db.session import get_db_session
-from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -14,20 +13,6 @@ from leltariv_server.api.assets import asset_detail
 from leltariv_server.dependencies import require_current_user
 
 router = APIRouter(prefix="/api/v1", tags=["asset-types"])
-
-
-# Átmeneti modellek: a közös szerződés megérkezésekor importokra cseréljük.
-class AssetTypeOut(BaseModel):
-    id: int
-    name: str
-
-
-class AssetTypeCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
-
-
-class AssetTypeSet(BaseModel):
-    asset_type_id: int
 
 
 @router.get(

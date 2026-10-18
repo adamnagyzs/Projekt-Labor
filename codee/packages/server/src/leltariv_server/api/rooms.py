@@ -1,11 +1,9 @@
 """Helyiségek végpontjai és közös megjelenítési segédfüggvénye."""
 
-from uuid import UUID
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from leltariv_contracts.rooms import RoomCreate, RoomOut
 from leltariv_infrastructure.db.models import InventoryZone, Room
 from leltariv_infrastructure.db.session import get_db_session
-from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -13,21 +11,6 @@ from sqlalchemy.orm import Session
 from leltariv_server.dependencies import require_current_user
 
 router = APIRouter(prefix="/api/v1", tags=["rooms"])
-
-
-# Átmeneti modellek: a közös szerződés megérkezésekor importokra cseréljük.
-class RoomOut(BaseModel):
-    id: UUID
-    zone_code: str
-    room_number: str
-    name: str | None = None
-    label: str
-
-
-class RoomCreate(BaseModel):
-    zone_code: str
-    room_number: str = Field(min_length=1, max_length=30)
-    name: str | None = Field(default=None, max_length=100)
 
 
 def room_label(room: Room) -> str:

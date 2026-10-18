@@ -44,7 +44,9 @@ class ApiClient(Protocol):
     def get_persons(self, token: str) -> list[PersonOut]: ...
     def set_responsible(self, token: str, asset_id: UUID, person_id: UUID) -> AssetDetail: ...
     def get_rooms(self, token: str, zone_code: str) -> list[RoomOut]: ...
-    def create_room(self, token: str, zone_code: str, room_number: str, name: str | None) -> RoomOut: ...
+    def create_room(
+        self, token: str, zone_code: str, room_number: str, name: str | None
+    ) -> RoomOut: ...
     def start_session(self, token: str, zone_code: str) -> SessionOut: ...
     def post_scan(
         self,
@@ -110,7 +112,7 @@ class HttpApiClient:
 
     def get_zones(self, token: str) -> list[ZoneOut]:
         payload = self._request("GET", "/zones", token=token)
-        return [ZoneOut.model_validate(zone) for zone in payload]
+        return [ZoneOut.model_validate(zone) for zone in payload]  # type: ignore[union-attr]
 
     def get_assets(
         self,
@@ -153,29 +155,38 @@ class HttpApiClient:
 
     def get_asset_types(self, token: str) -> list[AssetTypeOut]:
         payload = self._request("GET", "/asset-types", token=token)
-        return [AssetTypeOut.model_validate(item) for item in payload]
+        return [AssetTypeOut.model_validate(item) for item in payload]  # type: ignore[union-attr]
 
     def create_asset_type(self, token: str, name: str) -> AssetTypeOut:
         payload = self._request("POST", "/asset-types", token=token, json={"name": name})
         return AssetTypeOut.model_validate(payload)
 
     def set_asset_type(self, token: str, asset_id: UUID, asset_type_id: int) -> AssetDetail:
-        payload = self._request("PUT", f"/assets/{asset_id}/type", token=token, json={"asset_type_id": asset_type_id})
+        payload = self._request(
+            "PUT", f"/assets/{asset_id}/type", token=token, json={"asset_type_id": asset_type_id}
+        )
         return AssetDetail.model_validate(payload)
 
     def get_persons(self, token: str) -> list[PersonOut]:
         payload = self._request("GET", "/persons", token=token)
-        return [PersonOut.model_validate(item) for item in payload]
+        return [PersonOut.model_validate(item) for item in payload]  # type: ignore[union-attr]
 
     def set_responsible(self, token: str, asset_id: UUID, person_id: UUID) -> AssetDetail:
-        payload = self._request("PUT", f"/assets/{asset_id}/responsible", token=token, json={"person_id": str(person_id)})
+        payload = self._request(
+            "PUT",
+            f"/assets/{asset_id}/responsible",
+            token=token,
+            json={"person_id": str(person_id)},
+        )
         return AssetDetail.model_validate(payload)
 
     def get_rooms(self, token: str, zone_code: str) -> list[RoomOut]:
         payload = self._request("GET", "/rooms", token=token, params={"zone": zone_code})
-        return [RoomOut.model_validate(room) for room in payload]
+        return [RoomOut.model_validate(room) for room in payload]  # type: ignore[union-attr]
 
-    def create_room(self, token: str, zone_code: str, room_number: str, name: str | None) -> RoomOut:
+    def create_room(
+        self, token: str, zone_code: str, room_number: str, name: str | None
+    ) -> RoomOut:
         body: dict[str, object] = {"zone_code": zone_code, "room_number": room_number}
         if name:
             body["name"] = name
@@ -197,9 +208,7 @@ class HttpApiClient:
         body: dict[str, object] = {"raw_code": raw_code, "quantity": quantity}
         if room_id:
             body["room_id"] = str(room_id)
-        payload = self._request(
-            "POST", f"/sessions/{session_id}/scans", token=token, json=body
-        )
+        payload = self._request("POST", f"/sessions/{session_id}/scans", token=token, json=body)
         return ScanOut.model_validate(payload)
 
     def undo_scan(self, token: str, session_id: UUID, scan_id: UUID) -> ScanOut:
@@ -285,10 +294,22 @@ class FakeApiClient:
         ]
         self._rooms = {
             "261": [
-                RoomOut(id=uuid4(), zone_code="261", room_number="I-101", name="Iroda", label="I-101 · Iroda"),
+                RoomOut(
+                    id=uuid4(),
+                    zone_code="261",
+                    room_number="I-101",
+                    name="Iroda",
+                    label="I-101 · Iroda",
+                ),
             ],
             "262": [
-                RoomOut(id=uuid4(), zone_code="262", room_number="G-202", name="Labor", label="G-202 · Labor"),
+                RoomOut(
+                    id=uuid4(),
+                    zone_code="262",
+                    room_number="G-202",
+                    name="Labor",
+                    label="G-202 · Labor",
+                ),
             ],
         }
 
@@ -334,7 +355,7 @@ class FakeApiClient:
             items = [i for i in items if i.sub_number == 0]
         if multi_only:
             items = [i for i in items if i.quantity > 1]
-        
+
         return AssetPage(items=items, total=len(items), page=page, page_size=page_size)
 
     def get_asset(self, token: str, asset_id: UUID) -> AssetDetail:
@@ -386,7 +407,9 @@ class FakeApiClient:
         time.sleep(0.2)
         return self._rooms.get(zone_code, [])
 
-    def create_room(self, token: str, zone_code: str, room_number: str, name: str | None) -> RoomOut:
+    def create_room(
+        self, token: str, zone_code: str, room_number: str, name: str | None
+    ) -> RoomOut:
         time.sleep(0.2)
         new_room = RoomOut(
             id=uuid4(),
