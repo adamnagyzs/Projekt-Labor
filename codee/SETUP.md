@@ -127,6 +127,11 @@ A portok csak a saját gépről érhetők el (8000 szerver, 5432 PostgreSQL, 505
 
 Törli a beolvasásokat és mindent, majd újratölt; kb. 30 másodperc.
 
+**A 7–8. alkalom után egyszer kötelező.** Az új migráció a régi adatbázison is lefut, de a seed
+a már betöltött eszközökhöz nem nyúl, így azok a régi, megnevezésenkénti típusokat tartják meg
+(ezernél több „típust" a tíz kategória helyett). A friss betöltés után a seed kiírja a
+típusonkénti tételszámot.
+
 ```bash
 uv run alembic downgrade base
 ```
@@ -150,6 +155,7 @@ uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run 
 | Amit látsz | Ok | Teendő |
 |---|---|---|
 | `docker`: nem található, vagy „cannot connect to the Docker API” | a Rancher Desktop nem fut, vagy containerd a motor | indítsd el; Preferences → Container Engine → dockerd (moby) |
+| „timed out dialing Hyper-V socket”, a Rancher nem jön fel | a háttérben a Kubernetes is indul, és elakad; nekünk nem kell | Rancher kilépés (tálca → Quit), `wsl --shutdown`, majd Preferences → Kubernetes → kikapcsolás, vagy `rdctl start --kubernetes.enabled=false`. Az `rdctl start` nem tér vissza, amíg a Rancher fut: ne állítsd le, mert a Rancher is leáll vele |
 | `Hiányzó forrásfájl: …` / „Az adatok betöltése nem sikerült” | nincs meg a két XLSX | 2. pont, a `source-data` mappa vagy a `SOURCE_XLSX_DIR` |
 | „Az adatbázis már be van töltve …, a seed kihagyva.” | már van adat | ez a helyes; újratöltés: az 5. pont |
 | a seed nem találja az XLSX-et, pedig korábban ment | a `.env`-et felülírta a minta (`cp .env.example .env`) | írd vissza a `SOURCE_XLSX_DIR`-t, vagy tedd a fájlokat a `source-data` mappába |

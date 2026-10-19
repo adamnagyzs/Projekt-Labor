@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from leltariv_client.api import HttpApiClient
 from leltariv_client.dialogs import AssetDetailDialog
+from leltariv_client.pages.rooms import RoomsPage
 from leltariv_client.pages.scanning import ScanningPage
 from leltariv_client.worker import Worker
 
@@ -63,6 +64,8 @@ class AssetTableModel(QAbstractTableModel):
             "Mennyiség",
             "Aktiválva",
             "Gyári szám",
+            "Típus",
+            "Felelős",
         ]
 
     def data(self, index, role: int = Qt.ItemDataRole.DisplayRole):
@@ -81,6 +84,8 @@ class AssetTableModel(QAbstractTableModel):
                 str(item.quantity),
                 str(item.activated_on) if item.activated_on else "-",
                 item.serial_number or "-",
+                item.asset_type or "",
+                item.responsible or "",
             ]
             return vals[col]
 
@@ -193,22 +198,32 @@ class MainWindow(QMainWindow):
         self.asset_page = self.create_asset_page()
         self.stack.addWidget(
             QLabel(
-                "Fejlesztés alatt... (Válaszd az Eszközök menüt)",
+                "Fejlesztés alatt...",
                 alignment=Qt.AlignmentFlag.AlignCenter,
             )
         )
         self.stack.addWidget(self.asset_page)
         self.stack.addWidget(ScanningPage(api, token))
+        self.stack.addWidget(RoomsPage(api, token))
         self.stack.setCurrentIndex(1)
         v_layout.addWidget(self.stack)
         h_layout.addLayout(v_layout)
 
-        self.nav_list.currentRowChanged.connect(
-            # 1 = Eszközök, 2 = Leltározás; a többi menüpont még a „fejlesztés alatt" lap
-            lambda i: self.stack.setCurrentIndex(i if i in (1, 2) else 0)
-        )
+        self.nav_list.currentRowChanged.connect(self.on_nav_changed)
 
         self.load_zones()
+        self.load_metadata()
+
+    def on_nav_changed(self, i: int):
+        # 1 = Eszközök, 2 = Leltározás, 3 = Helyiségek; a többi 0
+        if i == 1:
+            self.stack.setCurrentIndex(1)
+        elif i == 2:
+            self.stack.setCurrentIndex(2)
+        elif i == 3:
+            self.stack.setCurrentIndex(3)
+        else:
+            self.stack.setCurrentIndex(0)
 
     def create_asset_page(self):
         page = QWidget()
@@ -233,14 +248,41 @@ class MainWindow(QMainWindow):
 
         self.zone_combo = QComboBox()
         self.zone_combo.addItem("Mind")
-        self.zone_combo.currentTextChanged.connect(self.trigger_search)
+        self.zone_combo.currentTextChanged.connect(self.on_zone_changed)
+
+        # Új szűrők: Típus, Helyiség, Felelős
+        self.type_combo = QComboBox()
+        self.type_combo.addItem("Mind", None)
+        self.type_combo.currentIndexChanged.connect(self.trigger_search)
+
+        self.room_combo = QComboBox()
+        self.room_combo.addItem("Mind", None)
+        self.room_combo.setEnabled(False)
+        self.room_combo.currentIndexChanged.connect(self.trigger_search)
+
+        self.person_combo = QComboBox()
+        # A szűrők a teljes nevet mutassák, ne csak az elejét („Teszt").
+        for combo in (self.type_combo, self.room_combo, self.person_combo):
+            combo.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+            )
+            combo.setMinimumContentsLength(10)
+        self.person_combo.addItem("Mind", None)
+        self.person_combo.currentIndexChanged.connect(self.trigger_search)
 
         self.main_only_cb = QCheckBox("Csak főeszközök")
         self.multi_only_cb = QCheckBox("Csak többdarabos")
         self.main_only_cb.toggled.connect(self.trigger_search)
         self.multi_only_cb.toggled.connect(self.trigger_search)
 
+        filter_layout.addWidget(QLabel("Körzet:"))
         filter_layout.addWidget(self.zone_combo)
+        filter_layout.addWidget(QLabel("Helyiség:"))
+        filter_layout.addWidget(self.room_combo)
+        filter_layout.addWidget(QLabel("Típus:"))
+        filter_layout.addWidget(self.type_combo)
+        filter_layout.addWidget(QLabel("Felelős:"))
+        filter_layout.addWidget(self.person_combo)
         filter_layout.addWidget(self.main_only_cb)
         filter_layout.addWidget(self.multi_only_cb)
         filter_layout.addWidget(self.search_field)
@@ -279,14 +321,29 @@ class MainWindow(QMainWindow):
         self.table.doubleClicked.connect(self.on_row_double_clicked)
         return page
 
+    def on_zone_changed(self):
+        zone_code = self.zone_combo.currentText()
+        self.room_combo.clear()
+        self.room_combo.addItem("Mind", None)
+        if zone_code == "Mind" or not zone_code:
+            self.room_combo.setEnabled(False)
+        else:
+            self.room_combo.setEnabled(True)
+            self.load_rooms(zone_code)
+        self.trigger_search()
+
     def trigger_search(self):
-        """Új keresés, körzet- vagy szűrőváltás: mindig az első oldalról indulunk."""
         self.current_page = 1
         self.load_page()
 
     def on_row_double_clicked(self, index):
-        item = self.model.item_at(self.proxy_model.mapToSource(index).row())
-        AssetDetailDialog(self.api, self.token, item.id, self).exec()
+        source_index = self.proxy_model.mapToSource(index)
+        item = self.model.item_at(source_index.row())
+        dlg = AssetDetailDialog(self.api, self.token, item.id, self)
+        dlg.exec()
+        # Csak akkor töltünk újra, ha az adatlapon mentettek: a Típus és Felelős oszlop változott.
+        if dlg.saved:
+            self.load_page()
 
     def go_previous_page(self):
         if self.current_page > 1:
@@ -303,6 +360,10 @@ class MainWindow(QMainWindow):
         self.next_button.setEnabled(False)
 
         zone = self.zone_combo.currentText()
+        asset_type_id = self.type_combo.currentData()
+        room_id = self.room_combo.currentData()
+        person_id = self.person_combo.currentData()
+
         worker = Worker(
             self.api.get_assets,
             self.token,
@@ -313,6 +374,9 @@ class MainWindow(QMainWindow):
             self.main_only_cb.isChecked(),
             self.multi_only_cb.isChecked(),
             self.search_field.currentData(),
+            asset_type_id=asset_type_id,
+            room_id=room_id,
+            person_id=person_id,
         )
         worker.signals.finished.connect(self.on_assets_loaded)
         worker.signals.error.connect(self.on_error)
@@ -325,10 +389,40 @@ class MainWindow(QMainWindow):
         worker.signals.error.connect(self.on_error)
         QThreadPool.globalInstance().start(worker)
 
+    def load_metadata(self):
+        # Típusok betöltése
+        t_worker = Worker(self.api.get_asset_types, self.token)
+        t_worker.signals.finished.connect(self.on_asset_types_loaded)
+        QThreadPool.globalInstance().start(t_worker)
+
+        # Felelősök betöltése
+        p_worker = Worker(self.api.get_persons, self.token)
+        p_worker.signals.finished.connect(self.on_persons_loaded)
+        QThreadPool.globalInstance().start(p_worker)
+
+    def load_rooms(self, zone_code: str):
+        worker = Worker(self.api.get_rooms, self.token, zone_code)
+        worker.signals.finished.connect(self.on_rooms_loaded)
+        QThreadPool.globalInstance().start(worker)
+
     def on_zones_loaded(self, zones):
         for z in zones:
             self.zone_combo.addItem(z.code)
+        # A körzetek hozzáadása nem váltja meg a „Mind" kijelölést, így az on_zone_changed
+        # nem fut le: az első oldalt itt kell kérni, különben belépés után üres a lista.
         self.trigger_search()
+
+    def on_asset_types_loaded(self, types):
+        for t in types:
+            self.type_combo.addItem(t.name, t.id)
+
+    def on_persons_loaded(self, persons):
+        for p in persons:
+            self.person_combo.addItem(p.name, p.id)
+
+    def on_rooms_loaded(self, rooms):
+        for r in rooms:
+            self.room_combo.addItem(r.label, r.id)
 
     def on_assets_loaded(self, page_data):
         # Gépelés vagy szűrőváltás közben több kérés is úton lehet, és nem sorrendben

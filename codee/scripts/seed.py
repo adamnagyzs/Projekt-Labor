@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import uuid4
 
+from leltariv_domain.categories import DEFAULT_TYPES, suggest_type
 from leltariv_domain.normalization import (
     is_meaningful_serial_number,
     normalize_code,
@@ -23,10 +24,13 @@ from leltariv_infrastructure.db.models import (
     AppUser,
     Asset,
     AssetCode,
+    AssetResponsible,
     AssetType,
     ImportBatch,
     InventoryPeriod,
     InventoryZone,
+    Person,
+    Room,
 )
 from leltariv_infrastructure.db.session import SessionLocal
 from sqlalchemy import func, select, update
@@ -42,6 +46,28 @@ ZONE_NAMES = {
     "261": "Leltárkörzet 261",
     "262": "Leltárkörzet 262",
 }
+
+DEMO_ROOMS: tuple[tuple[str, str, str], ...] = (
+    ("261", "I-101", "Iroda"),
+    ("261", "I-217", "Labor"),
+    ("261", "I-220", "Raktár"),
+    ("262", "G-012", "Műhely"),
+    ("262", "G-105", "Tárgyaló"),
+    ("262", "G-210", "Labor"),
+)
+
+#: Kitalált felelősök. Valódi munkatárs neve nem kerülhet ide: a 262-es forrásfájl
+#: metaadatában van egy, azt sem használjuk.
+DEMO_PERSONS: tuple[str, ...] = (
+    "Teszt Anna",
+    "Teszt Béla",
+    "Teszt Csilla",
+    "Teszt Dávid",
+    "Teszt Erika",
+)
+
+#: ennyi 262-es főeszköz kap demófelelőst, eszközszám szerint, körbeforgóan
+DEMO_RESPONSIBLE_COUNT = 40
 
 
 @dataclass(frozen=True)
@@ -183,6 +209,93 @@ def get_or_create_zone(session: Session, code: str) -> InventoryZone:
     return zone
 
 
+def seed_demo_rooms(session: Session) -> int:
+    """A hiányzó demóhelyiségeket létrehozza, a meglévőket nem módosítja."""
+    created = 0
+
+    for zone_code, room_number, name in DEMO_ROOMS:
+        zone = get_or_create_zone(session, zone_code)
+        existing = session.scalar(
+            select(Room).where(
+                Room.zone_id == zone.id,
+                Room.room_number == room_number,
+            )
+        )
+        if existing is not None:
+            continue
+
+        session.add(
+            Room(
+                id=uuid4(),
+                zone_id=zone.id,
+                room_number=room_number,
+                name=name,
+            )
+        )
+        session.flush()
+        created += 1
+
+    return created
+
+
+def seed_demo_responsibles(session: Session) -> tuple[int, int]:
+    """Kitalált felelősök és a hozzárendelésük; ami már megvan, azt nem hozza létre újra.
+
+    A felületen beállított felelőst egy újabb seed nem írja felül.
+    """
+    zone = get_or_create_zone(session, "262")
+    persons: list[Person] = []
+    created = 0
+    for name in DEMO_PERSONS:
+        person = session.scalar(select(Person).where(Person.name == name))
+        if person is None:
+            person = Person(id=uuid4(), name=name, org_unit=ZONE_NAMES["262"])
+            session.add(person)
+            created += 1
+        persons.append(person)
+    session.flush()
+
+    # Ha már van hozzárendelés (seedből vagy a felületről), egy újabb futás nem tesz hozzá többet.
+    if session.scalar(select(func.count()).select_from(AssetResponsible)):
+        return created, 0
+
+    # Kézzelfogható eszközök kapjanak felelőst (bútor, gép, műszer), ne a licencek, amelyek az
+    # eszközszám szerinti elejét adják a 262-nek, és az „Egyéb" típusba esnek.
+    assets = session.scalars(
+        select(Asset)
+        .join(AssetType, Asset.asset_type_id == AssetType.id)
+        .where(Asset.zone_id == zone.id, Asset.sub_number == 0, AssetType.name != "Egyéb")
+        .order_by(Asset.asset_number)
+        .limit(DEMO_RESPONSIBLE_COUNT)
+    ).all()
+    for index, asset in enumerate(assets):
+        session.add(
+            AssetResponsible(
+                id=uuid4(),
+                asset_id=asset.id,
+                person_id=persons[index % len(persons)].id,
+            )
+        )
+    session.flush()
+    return created, len(assets)
+
+
+def seed_default_types(session: Session) -> None:
+    """Az üres kategória is választható legyen a felületen."""
+    for name in DEFAULT_TYPES:
+        get_or_create_asset_type(session, name=name, name_normalized=normalize_text(name))
+
+
+def type_counts(session: Session) -> list[tuple[str, int]]:
+    rows = session.execute(
+        select(AssetType.name, func.count(Asset.id))
+        .join(Asset, Asset.asset_type_id == AssetType.id, isouter=True)
+        .group_by(AssetType.name)
+        .order_by(func.count(Asset.id).desc())
+    ).all()
+    return [(name, count) for name, count in rows]
+
+
 def get_or_create_asset_type(
     session: Session,
     *,
@@ -294,10 +407,12 @@ def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
             with session.begin_nested():
                 seed_asset = row_to_seed_asset(row)
                 zone = get_or_create_zone(session, seed_asset.zone_code)
+                # A típus kategória, nem a megnevezés másolata; a javaslat kézzel felülírható.
+                type_name = suggest_type(seed_asset.name_normalized)
                 asset_type = get_or_create_asset_type(
                     session,
-                    name=seed_asset.name,
-                    name_normalized=seed_asset.name_normalized,
+                    name=type_name,
+                    name_normalized=normalize_text(type_name),
                 )
 
                 existing_asset = session.scalar(
@@ -420,21 +535,29 @@ def source_paths(source_dir: Path) -> list[Path]:
 def main() -> None:
     """A teljes fejlesztői seed futtatása."""
     source_dir = get_source_dir()
-
     session = SessionLocal()
 
     try:
-        # Az indító minden induláskor meghívja: ha már van adat, ne próbálja újra betölteni.
         loaded = session.scalar(select(func.count()).select_from(Asset)) or 0
+
         if loaded:
-            print(f"Az adatbázis már be van töltve ({loaded} eszköz), a seed kihagyva.")
+            rooms_created = seed_demo_rooms(session)
+            persons_created, assigned = seed_demo_responsibles(session)
+            session.commit()
+
+            print(f"Az adatbázis már be van töltve ({loaded} eszköz), az Excel-import kihagyva.")
+            print(f"Új demóhelyiségek: {rooms_created}.")
+            print(f"Új demófelelősök: {persons_created}, új hozzárendelés: {assigned}.")
             return
 
         get_or_create_period(session)
         seed_users(session)
+        seed_default_types(session)
 
         totals = [seed_file(session, path) for path in source_paths(source_dir)]
         linked = link_accessories(session)
+        rooms_created = seed_demo_rooms(session)
+        persons_created, assigned = seed_demo_responsibles(session)
 
         session.commit()
 
@@ -446,6 +569,11 @@ def main() -> None:
             f"Seed kész: {rows_ok}/{rows_read} eszköz, {rows_failed} hibás sor, "
             f"{linked} tartozék a főeszközéhez kötve."
         )
+        print(f"Új demóhelyiségek: {rooms_created}.")
+        print(f"Új demófelelősök: {persons_created}, új hozzárendelés: {assigned}.")
+        print("Típusonként:")
+        for name, count in type_counts(session):
+            print(f"  {name}: {count}")
     except Exception:
         session.rollback()
         raise

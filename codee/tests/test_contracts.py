@@ -86,6 +86,7 @@ def test_scan_out_roundtrip_without_asset() -> None:
         result="UNKNOWN_CODE",
         scanned_at=datetime.now(UTC),
         message="Ismeretlen kód: X123. Rögzítettük, de nem tartozik hozzá eszköz.",
+        quantity=1,
     )
     parsed = ScanOut.model_validate_json(scan.model_dump_json())
     assert parsed.asset is None
@@ -95,3 +96,9 @@ def test_scan_out_roundtrip_without_asset() -> None:
 def test_empty_scan_code_is_rejected() -> None:
     with pytest.raises(ValidationError):
         ScanCreate(raw_code="")
+
+
+def test_scan_quantity_bounds() -> None:
+    assert ScanCreate(raw_code="024540").quantity == 1
+    with pytest.raises(ValidationError):
+        ScanCreate(raw_code="024540", quantity=0)

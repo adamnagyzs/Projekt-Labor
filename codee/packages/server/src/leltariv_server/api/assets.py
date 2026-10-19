@@ -8,14 +8,27 @@ from leltariv_contracts.assets import (
     AssetListItem,
     AssetPage,
     CodeType,
+    PersonOut,
 )
 from leltariv_domain.normalization import normalize_code, normalize_text
-from leltariv_infrastructure.db.models import Asset, AssetCode, AssetType, InventoryZone
+from leltariv_infrastructure.db.models import (
+    Asset,
+    AssetCode,
+    AssetResponsible,
+    AssetType,
+    InventoryPeriod,
+    InventorySession,
+    InventoryZone,
+    Person,
+    Room,
+    Scan,
+)
 from leltariv_infrastructure.db.session import get_db_session
-from sqlalchemy import func, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
+from leltariv_server.api.rooms import room_label
 from leltariv_server.dependencies import require_current_user
 
 router = APIRouter(prefix="/api/v1", tags=["assets"])
@@ -47,12 +60,40 @@ def primary_inventory_numbers(
     return primary_codes
 
 
+def types_and_responsibles(
+    session: Session,
+    asset_ids: list[UUID],
+) -> dict[UUID, tuple[str | None, str | None]]:
+    """Eszközönként a típus neve és a jelenlegi felelős neve, egy lekérdezéssel."""
+    if not asset_ids:
+        return {}
+
+    rows = session.execute(
+        select(Asset.id, AssetType.name, Person.name)
+        .join(AssetType, Asset.asset_type_id == AssetType.id, isouter=True)
+        .join(
+            AssetResponsible,
+            (AssetResponsible.asset_id == Asset.id) & AssetResponsible.valid_to.is_(None),
+            isouter=True,
+        )
+        .join(Person, AssetResponsible.person_id == Person.id, isouter=True)
+        .where(Asset.id.in_(asset_ids))
+    ).all()
+    return {asset_id: (type_name, person_name) for asset_id, type_name, person_name in rows}
+
+
 def asset_list_item(
     asset: Asset,
     zone_code: str | None,
     primary_codes: dict[UUID, str],
+    labels: dict[UUID, tuple[str | None, str | None]] | None = None,
 ) -> AssetListItem:
-    """Adatbázis-eszközből a közös lista-szerződésnek megfelelő objektumot épít."""
+    """Adatbázis-eszközből a közös lista-szerződésnek megfelelő objektumot épít.
+
+    A `labels` a `types_and_responsibles` eredménye; ahol nincs megadva (például a
+    beolvasás válaszában), ott a típus és a felelős üresen marad.
+    """
+    asset_type, responsible = (labels or {}).get(asset.id, (None, None))
     return AssetListItem(
         id=asset.id,
         asset_number=asset.asset_number,
@@ -63,6 +104,28 @@ def asset_list_item(
         quantity=asset.quantity,
         activated_on=asset.activated_on,
         serial_number=asset.serial_number,
+        asset_type=asset_type,
+        responsible=responsible,
+    )
+
+
+def room_scans() -> Select[tuple[Scan]]:
+    """Az aktív időszak helyiséggel rögzített, vissza nem vont beolvasásai.
+
+    Az eszköz helye nem az eszköz mezője, hanem a naplóból számolt érték: ahol utoljára
+    beolvasták. A visszavonó sor és az, amit visszavontak, nem számít helymegállapításnak.
+    """
+    undone = select(Scan.compensates_scan_id).where(Scan.compensates_scan_id.is_not(None))
+    return (
+        select(Scan)
+        .join(InventorySession, Scan.session_id == InventorySession.id)
+        .join(InventoryPeriod, InventorySession.period_id == InventoryPeriod.id)
+        .where(
+            Scan.room_id.is_not(None),
+            Scan.compensates_scan_id.is_(None),
+            Scan.id.not_in(undone),
+            InventoryPeriod.state == "ACTIVE",
+        )
     )
 
 
@@ -78,6 +141,18 @@ def list_assets(
     ),
     q: str | None = Query(default=None, description="Szabad szöveges keresőkifejezés."),
     field: SearchField = "mind",
+    asset_type_id: int | None = Query(
+        default=None,
+        description="Szűrés eszköztípus azonosítója alapján.",
+    ),
+    room_id: UUID | None = Query(  # noqa: B008
+        default=None,
+        description="Az aktív időszakban ebben a helyiségben beolvasott eszközök.",
+    ),
+    person_id: UUID | None = Query(  # noqa: B008
+        default=None,
+        description="Azok az eszközök, amelyeknek ez a személy a jelenlegi felelőse.",
+    ),
     main_only: bool = Query(
         default=False,
         description="Csak főeszközök, vagyis alszám 0.",
@@ -114,6 +189,20 @@ def list_assets(
             )
         zone_id = inventory_zone.id
         filters.append(Asset.zone_id == zone_id)
+
+    if asset_type_id is not None:
+        filters.append(Asset.asset_type_id == asset_type_id)
+
+    if room_id is not None:
+        in_room = room_scans().where(Scan.room_id == room_id).with_only_columns(Scan.asset_id)
+        filters.append(Asset.id.in_(in_room))
+
+    if person_id is not None:
+        current = select(AssetResponsible.asset_id).where(
+            AssetResponsible.person_id == person_id,
+            AssetResponsible.valid_to.is_(None),
+        )
+        filters.append(Asset.id.in_(current))
 
     if main_only:
         filters.append(Asset.sub_number == 0)
@@ -156,9 +245,11 @@ def list_assets(
 
     asset_ids = [asset.id for asset, _ in rows]
     primary_codes = primary_inventory_numbers(session, asset_ids)
+    labels = types_and_responsibles(session, asset_ids)
 
     items = [
-        asset_list_item(asset, asset_zone_code, primary_codes) for asset, asset_zone_code in rows
+        asset_list_item(asset, asset_zone_code, primary_codes, labels)
+        for asset, asset_zone_code in rows
     ]
 
     return AssetPage(
@@ -169,16 +260,8 @@ def list_assets(
     )
 
 
-@router.get(
-    "/assets/{asset_id}",
-    response_model=AssetDetail,
-    summary="Egy eszköz részletes adatlapja",
-)
-def get_asset(
-    asset_id: UUID,
-    _current_user: object = Depends(require_current_user),  # noqa: B008
-    session: Session = Depends(get_db_session),  # noqa: B008
-) -> AssetDetail:
+def asset_detail(session: Session, asset_id: UUID) -> AssetDetail:
+    """Az eszköz adatlapját állítja össze a GET és PUT végpontok számára."""
     row = session.execute(
         select(Asset, InventoryZone.code, AssetType.name)
         .join(InventoryZone, Asset.zone_id == InventoryZone.id)
@@ -198,7 +281,11 @@ def get_asset(
         session.execute(
             select(AssetCode)
             .where(AssetCode.asset_id == asset.id)
-            .order_by(AssetCode.is_primary.desc(), AssetCode.code_type, AssetCode.code)
+            .order_by(
+                AssetCode.is_primary.desc(),
+                AssetCode.code_type,
+                AssetCode.code,
+            )
         )
         .scalars()
         .all()
@@ -222,11 +309,28 @@ def get_asset(
 
     accessory_ids = [accessory.id for accessory, _ in accessory_rows]
     accessory_primary_codes = primary_inventory_numbers(session, accessory_ids)
+    accessory_labels = types_and_responsibles(session, accessory_ids)
 
     accessories = [
-        asset_list_item(accessory, accessory_zone_code, accessory_primary_codes)
+        asset_list_item(
+            accessory,
+            accessory_zone_code,
+            accessory_primary_codes,
+            accessory_labels,
+        )
         for accessory, accessory_zone_code in accessory_rows
     ]
+
+    last_room_scan = session.scalars(
+        room_scans().where(Scan.asset_id == asset.id).order_by(Scan.scanned_at.desc()).limit(1)
+    ).first()
+    room = session.get(Room, last_room_scan.room_id) if last_room_scan is not None else None
+
+    person = session.scalar(
+        select(Person)
+        .join(AssetResponsible, AssetResponsible.person_id == Person.id)
+        .where(AssetResponsible.asset_id == asset.id, AssetResponsible.valid_to.is_(None))
+    )
 
     return AssetDetail(
         id=asset.id,
@@ -238,6 +342,27 @@ def get_asset(
         activated_on=asset.activated_on,
         serial_number=asset.serial_number,
         asset_type=asset_type_name,
+        asset_type_id=asset.asset_type_id,
+        room=room_label(room) if room is not None else None,
+        responsible=(
+            PersonOut(id=person.id, name=person.name, org_unit=person.org_unit)
+            if person is not None
+            else None
+        ),
         codes=codes,
         accessories=accessories,
     )
+
+
+@router.get(
+    "/assets/{asset_id}",
+    response_model=AssetDetail,
+    summary="Egy eszköz részletes adatlapja",
+)
+def get_asset(
+    asset_id: UUID,
+    _current_user: object = Depends(require_current_user),  # noqa: B008
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> AssetDetail:
+    """A bejelentkezett felhasználónak visszaadja az eszköz adatlapját."""
+    return asset_detail(session, asset_id)
