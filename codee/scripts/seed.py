@@ -19,13 +19,15 @@ from leltariv_infrastructure.db.models import (
     AppUser,
     Asset,
     AssetResponsible,
+    AssetStatusChange,
     AssetType,
     InventoryPeriod,
+    InventoryZone,
     Person,
     Room,
 )
 from leltariv_infrastructure.db.session import SessionLocal
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 SOURCE_FILES = (
@@ -127,6 +129,44 @@ def seed_demo_responsibles(session: Session) -> tuple[int, int]:
     return created, len(assets)
 
 
+def seed_demo_statuses(session: Session) -> int:
+    """Üres állapotnaplónál a 262-es körzet utolsó három főeszközét jelöli meg."""
+    # A napló ellenőrzése és feltöltése között egy másik tranzakció ne írhasson bele.
+    session.execute(text("LOCK TABLE asset_status_change IN SHARE ROW EXCLUSIVE MODE"))
+    if session.scalar(select(AssetStatusChange.id).limit(1)) is not None:
+        return 0
+
+    demo_statuses = (
+        ("SCRAPPED", "Demó: selejtezési jegyzőkönyv 2026/1"),
+        ("LOST", "Demó: a 2025-ös leltárban sem került elő"),
+        ("STOLEN", "Demó: rendőrségi feljelentés"),
+    )
+    assets = session.scalars(
+        select(Asset)
+        .join(InventoryZone, Asset.zone_id == InventoryZone.id)
+        .where(InventoryZone.code == "262", Asset.sub_number == 0)
+        .order_by(Asset.asset_number.desc())
+        .limit(len(demo_statuses))
+    ).all()
+    if len(assets) < len(demo_statuses):
+        return 0
+
+    for asset, (new_status, reason) in zip(assets, demo_statuses, strict=True):
+        if not asset.name.startswith("Demó: "):
+            asset.name = f"Demó: {asset.name}"
+            asset.name_normalized = normalize_text(asset.name)
+        session.add(
+            AssetStatusChange(
+                asset_id=asset.id,
+                old_status="ACTIVE",
+                new_status=new_status,
+                reason=reason,
+            )
+        )
+    session.flush()
+    return len(assets)
+
+
 def seed_default_types(session: Session) -> None:
     """Az üres kategória is választható legyen a felületen."""
     for name in DEFAULT_TYPES:
@@ -223,11 +263,13 @@ def main() -> None:
         if loaded:
             rooms_created = seed_demo_rooms(session)
             persons_created, assigned = seed_demo_responsibles(session)
+            statuses_created = seed_demo_statuses(session)
             session.commit()
 
             print(f"Az adatbázis már be van töltve ({loaded} eszköz), az Excel-import kihagyva.")
             print(f"Új demóhelyiségek: {rooms_created}.")
             print(f"Új demófelelősök: {persons_created}, új hozzárendelés: {assigned}.")
+            print(f"Új demóállapotok: {statuses_created}.")
             return
 
         get_or_create_period(session)
@@ -246,6 +288,7 @@ def main() -> None:
         linked = link_accessories(session)
         rooms_created = seed_demo_rooms(session)
         persons_created, assigned = seed_demo_responsibles(session)
+        statuses_created = seed_demo_statuses(session)
 
         session.commit()
 
@@ -259,6 +302,7 @@ def main() -> None:
         )
         print(f"Új demóhelyiségek: {rooms_created}.")
         print(f"Új demófelelősök: {persons_created}, új hozzárendelés: {assigned}.")
+        print(f"Új demóállapotok: {statuses_created}.")
         print("Típusonként:")
         for name, count in type_counts(session):
             print(f"  {name}: {count}")
