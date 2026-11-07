@@ -113,6 +113,26 @@ uv run uvicorn leltariv_server.main:app --host 127.0.0.1 --port 8000
 uv run python -m leltariv_client.app
 ```
 
+### A szerver konténerben (9–10. alkalomtól)
+
+A szerver a `docker-compose.yml` `szerver` profiljában konténerként is fut. Ilyenkor a gépen csak
+a kliens kell. Induláskor a konténer maga futtatja a migrációt; a seedet nem, mert ahhoz a két XLSX
+kell, ami nincs a képben. Friss adatbázisba a seedet a gazdagépről kell lefuttatni (fent), vagy a
+kliens **Adminisztráció** oldalán be kell importálni a két listát.
+
+```bash
+docker compose --profile szerver up -d --build
+```
+
+Ugyanazt a 8000-es portot használja, mint az indító (`Leltariv.exe`) helyben indított szervere,
+ezért a kettő közül egyszerre csak egy fusson. A konténeres szerver leállítása:
+
+```bash
+docker compose --profile szerver stop server
+```
+
+A pillanatképek ilyenkor is a `codee/snapshots` mappába kerülnek.
+
 ## 4. Címek és portok
 
 | Cím | Mi |
@@ -144,11 +164,20 @@ uv run alembic upgrade head
 uv run python scripts/seed.py
 ```
 
+**A 9–10. alkalom után** nem kell újratölteni: a migráció a meglévő adatbázison lefut, minden
+eszköz `Aktív` állapotot kap. A korábban mentett pillanatképek viszont a régi sémához készültek,
+ezért a visszatöltés ezeket elutasítja. Az új séma után ments új pillanatképet.
+
 A CI-vel azonos ellenőrzések, commit előtt:
 
 ```bash
 uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run pytest
 ```
+
+Az adatbázisos tesztek (`tests/test_db_rules.py`) helyben kimaradnak, mert a `.env`
+`DATABASE_URL`-je a fejlesztői adatbázis, abba teszt nem írhat. Ha futtatni akarod őket, adj meg
+egy eldobható, migrált adatbázist a `TEST_DATABASE_URL`-ben. A tesztek tranzakcióban futnak, és a
+végén mindent visszagörgetnek.
 
 ## 6. Ha valami nem megy
 
