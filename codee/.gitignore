@@ -23,3 +23,6 @@ build/
 volumes/db/data/
 volumes/storage/
 supabase-src/
+
+# pillanatképek — a teljes adatbázist tartalmazzák, a forrásadattal együtt
+snapshots/

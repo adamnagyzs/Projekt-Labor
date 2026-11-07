@@ -23,6 +23,9 @@ from sqlalchemy.sql import text
 
 from leltariv_infrastructure.db.base import Base
 
+#: SQL-felsorolás a CHECK megkötésekhez; a lista a leltariv_contracts.assets.AssetStatus
+ASSET_STATUSES = "('ACTIVE', 'SCRAPPED', 'LOST', 'STOLEN', 'OTHER')"
+
 
 class InventoryZone(Base):
     __tablename__ = "inventory_zone"
@@ -69,10 +72,13 @@ class Asset(Base):
     __tablename__ = "asset"
     __table_args__ = (
         UniqueConstraint("asset_number", "sub_number", name="uq_asset_number_sub_number"),
+        CheckConstraint(f"status IN {ASSET_STATUSES}", name="ck_asset_status"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     asset_number: Mapped[str] = mapped_column(Text, nullable=False)
+    #: csak az `asset_status_change` táblába írt sorral változhat (trigger őrzi)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'ACTIVE'"))
     sub_number: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     name_normalized: Mapped[str] = mapped_column(Text, nullable=False)
@@ -221,6 +227,35 @@ class AssetResponsible(Base):
     assigned_by: Mapped[UUID | None] = mapped_column(ForeignKey("app_user.id"), nullable=True)
 
 
+class AssetStatusChange(Base):
+    """Állapotváltások naplója, csak hozzáírható.
+
+    Egy sor beszúrása állítja át az `asset.status`-t (trigger), és csak akkor, ha az
+    `old_status` a mostani állapot; két egyidejű váltásból így az egyik elbukik.
+    """
+
+    __tablename__ = "asset_status_change"
+    __table_args__ = (
+        CheckConstraint(f"old_status IN {ASSET_STATUSES}", name="ck_status_change_old"),
+        CheckConstraint(f"new_status IN {ASSET_STATUSES}", name="ck_status_change_new"),
+        CheckConstraint("new_status <> old_status", name="ck_status_change_differs"),
+        CheckConstraint("length(btrim(reason)) > 0", name="ck_status_change_reason"),
+        Index("ix_asset_status_change_asset", "asset_id", "changed_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    asset_id: Mapped[UUID] = mapped_column(ForeignKey("asset.id"), nullable=False)
+    old_status: Mapped[str] = mapped_column(Text, nullable=False)
+    new_status: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    changed_by: Mapped[UUID | None] = mapped_column(ForeignKey("app_user.id"), nullable=True)
+
+
 class AppUser(Base):
     __tablename__ = "app_user"
     __table_args__ = (
@@ -247,6 +282,18 @@ class InventoryPeriod(Base):
             "state IN ('DRAFT', 'ACTIVE', 'CLOSED')",
             name="ck_inventory_period_state",
         ),
+        # lezárt időszaknak van lezárási ideje, a többinek nincs
+        CheckConstraint(
+            "(state = 'CLOSED') = (closed_at IS NOT NULL)",
+            name="ck_inventory_period_closed_at",
+        ),
+        # egyszerre legfeljebb egy aktív időszak
+        Index(
+            "uq_inventory_period_one_active",
+            "state",
+            unique=True,
+            postgresql_where=text("state = 'ACTIVE'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -254,7 +301,7 @@ class InventoryPeriod(Base):
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    state: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class InventorySession(Base):

@@ -1,0 +1,12 @@
+# A képbe csak a forrás kerül; a helyi környezet, a titkok és az adat nem.
+.venv/
+**/__pycache__/
+.env
+snapshots/
+source-data/
+build/
+dist/
+*.XLSX
+*.xlsx
+volumes/
+supabase-src/

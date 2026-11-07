@@ -40,6 +40,9 @@ jobs:
       UV_PYTHON_PREFERENCE: only-managed
       # A migracio-proba ide csatlakozik; a jelszo csak a futtaton elo, eldobhato kontenere.
       DATABASE_URL: postgresql+psycopg://postgres:leltar2026@localhost:5432/leltariv
+      # Az adatbazisos tesztek (tests/test_db_rules.py) csak ezzel futnak. Helyben nincs
+      # beallitva, mert ott a DATABASE_URL a fejlesztoi adatbazis; itt ugyanaz az eldobhato.
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:leltar2026@localhost:5432/leltariv
 
     # Ugyanaz a Postgres-verzio, mint a docker-compose.yml-ben.
     services:

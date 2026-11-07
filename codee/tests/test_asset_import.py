@@ -1,9 +1,9 @@
 from datetime import date
 from decimal import Decimal
 
-from scripts.seed import (
-    asset_codes_for_seed,
-    row_to_seed_asset,
+from leltariv_infrastructure.asset_import import (
+    asset_codes_for,
+    row_to_source_asset,
     serial_number_can_be_code,
 )
 
@@ -29,8 +29,8 @@ def sample_row(**overrides: object) -> dict[str, object]:
     return row
 
 
-def test_row_to_seed_asset_maps_the_required_fields() -> None:
-    asset = row_to_seed_asset(sample_row())
+def test_row_to_source_asset_maps_the_required_fields() -> None:
+    asset = row_to_source_asset(sample_row())
 
     assert asset.asset_number == "3001540"
     assert asset.sub_number == 1
@@ -44,9 +44,9 @@ def test_row_to_seed_asset_maps_the_required_fields() -> None:
 
 
 def test_asset_codes_keep_leading_zero_and_add_meaningful_serial() -> None:
-    asset = row_to_seed_asset(sample_row())
+    asset = row_to_source_asset(sample_row())
 
-    assert asset_codes_for_seed(asset) == [
+    assert asset_codes_for(asset) == [
         ("005071", "LELTARSZAM", True),
         ("3001540", "ESZKOZSZAM", False),
         ("SN-001", "GYARI_SZAM", False),
@@ -55,14 +55,14 @@ def test_asset_codes_keep_leading_zero_and_add_meaningful_serial() -> None:
 
 def test_invalid_serial_numbers_are_not_seeded_as_asset_codes() -> None:
     for serial_number in ("-", "?", "BÚTOR", "IMÜ-02", "12", None):
-        asset = row_to_seed_asset(sample_row(**{"Gyártási szám": serial_number}))
+        asset = row_to_source_asset(sample_row(**{"Gyártási szám": serial_number}))
 
         assert not serial_number_can_be_code(serial_number)
-        assert all(code_type != "GYARI_SZAM" for _, code_type, _ in asset_codes_for_seed(asset))
+        assert all(code_type != "GYARI_SZAM" for _, code_type, _ in asset_codes_for(asset))
 
 
 def test_duplicate_codes_on_same_asset_are_seeded_once() -> None:
-    asset = row_to_seed_asset(
+    asset = row_to_source_asset(
         sample_row(
             **{
                 "Leltárszám": "3038736",
@@ -72,7 +72,7 @@ def test_duplicate_codes_on_same_asset_are_seeded_once() -> None:
         )
     )
 
-    assert asset_codes_for_seed(asset) == [
+    assert asset_codes_for(asset) == [
         ("3038736", "LELTARSZAM", True),
         ("10299695019948", "GYARI_SZAM", False),
     ]

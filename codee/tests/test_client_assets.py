@@ -52,6 +52,12 @@ class FakeApi:
         self.types.append(new)
         return new
 
+    def get_periods(self, token: str) -> list[object]:
+        return []
+
+    def get_snapshots(self, token: str) -> list[object]:
+        return []
+
     def get_persons(self, token: str) -> list[PersonOut]:
         self.persons_release.wait(timeout=5)
         # mindig új objektumok, ahogy a szerver válaszából

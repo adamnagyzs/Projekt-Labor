@@ -3,10 +3,14 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import IO
 
 from openpyxl import load_workbook
 
 EXCEL_DATE_BASE = date(1899, 12, 30)
+
+#: ezek nélkül egy sor sem tölthető be; ha bármelyik hiányzik, a fájl nem SAP-eszközlista
+REQUIRED_COLUMNS = ("Eszköz", "Alszám", "Eszköz megnevezése", "Telephely", "Mennyiség")
 
 
 def clean_header(value: object) -> str:
@@ -70,23 +74,26 @@ def is_asset_row(row: tuple[object, ...]) -> bool:
     return len(row) > 1 and row[1] not in (None, "")
 
 
-def read_asset_rows(path: Path) -> Iterator[tuple[int, dict[str, object]]]:
+def read_asset_rows(source: Path | IO[bytes]) -> Iterator[tuple[int, dict[str, object]]]:
     """XLSX-ből valódi eszközsorokat ad vissza (Excel-sorszám, fejlécnév szerinti dict) párként."""
-    workbook = load_workbook(path, read_only=True, data_only=True)
+    workbook = load_workbook(source, read_only=True, data_only=True)
     worksheet = workbook.active
 
     if worksheet is None:
         workbook.close()
-        raise ValueError(f"Nincs aktív munkalap: {path}")
+        raise ValueError("Nincs aktív munkalap.")
 
     try:
         row_iterator = worksheet.iter_rows(values_only=True)
         raw_headers = next(row_iterator, None)
 
         if raw_headers is None:
-            raise ValueError(f"Üres munkalap: {path}")
+            raise ValueError("Üres munkalap.")
 
         headers = [clean_header(header) for header in raw_headers]
+        missing = [column for column in REQUIRED_COLUMNS if column not in headers]
+        if missing:
+            raise ValueError(f"Nem SAP-eszközlista, hiányzó oszlop: {', '.join(missing)}.")
 
         for row_number, row in enumerate(row_iterator, start=2):
             if not is_asset_row(row):

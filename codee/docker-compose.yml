@@ -6,6 +6,7 @@
 #    az a compose a Supabase repóból jön, mert a volumes/ alatti konfigurációkat nem írjuk kézzel.
 #
 # Indítás:  docker compose up -d
+#           docker compose --profile szerver up -d --build   (a szerver is konténerben)
 # Állapot:  docker compose ps
 # Leállás:  docker compose down          (az adat megmarad)
 #           docker compose down -v       (az adat is törlődik)
@@ -50,6 +51,32 @@ services:
         condition: service_healthy
     volumes:
       - pgadmin-data:/var/lib/pgadmin
+
+  # A szerver konténerben. Profilban van, mert az indító (scripts/start.py, Leltariv.exe)
+  # a gazdagépen futtatja a szervert ugyanezen a porton: a kettő közül egyszerre egy fusson.
+  server:
+    profiles: ["szerver"]
+    build: .
+    image: leltariv-server
+    container_name: leltariv-server
+    restart: unless-stopped
+    environment:
+      # A konténerek hálózatán az adatbázis neve `db`, a portja a belső 5432.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-leltar2026}@db:5432/${POSTGRES_DB:-leltariv}
+      AUTH_MODE: ${AUTH_MODE:-local}
+      JWT_SECRET: ${JWT_SECRET:-}
+      GOTRUE_URL: ${GOTRUE_URL:-}
+      SNAPSHOT_DIR: /snapshots
+    ports:
+      # Csak localhost, mint az adatbázisnál.
+      - "127.0.0.1:${SERVER_PORT:-8000}:8000"
+    volumes:
+      # A pillanatképek a gazdagép codee/snapshots mappájába kerülnek, ugyanoda, ahova a
+      # helyben futó szerver is menti őket.
+      - ./snapshots:/snapshots
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   db-data:

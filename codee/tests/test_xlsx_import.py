@@ -54,9 +54,9 @@ def test_read_asset_rows_preserves_excel_row_numbers(tmp_path: Path) -> None:
     workbook = Workbook()
     worksheet = workbook.active
     assert worksheet is not None
-    worksheet.append(["Eszköz", "Alszám", "Eszköz megnevezése"])
-    worksheet.append(["3000001", 0, "Első eszköz"])
-    worksheet.append(["3000002", 1, "Második eszköz"])
+    worksheet.append(["Eszköz", "Alszám", "Eszköz megnevezése", "Telephely", "Mennyiség"])
+    worksheet.append(["3000001", 0, "Első eszköz", "2610000000", 1])
+    worksheet.append(["3000002", 1, "Második eszköz", "2610000000", 1])
     workbook.save(path)
     workbook.close()
 
@@ -65,3 +65,18 @@ def test_read_asset_rows_preserves_excel_row_numbers(tmp_path: Path) -> None:
     assert [row_number for row_number, _ in rows] == [2, 3]
     assert rows[0][1]["Eszköz"] == "3000001"
     assert rows[1][1]["Alszám"] == 1
+
+
+def test_read_asset_rows_rejects_other_spreadsheets(tmp_path: Path) -> None:
+    path = tmp_path / "bevasarlolista.xlsx"
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.append(["Termék", "Alszám", "Mennyiség"])
+    worksheet.append(["kenyér", 1, 2])
+    workbook.save(path)
+    workbook.close()
+
+    with pytest.raises(ValueError, match="Eszköz megnevezése"):
+        list(read_asset_rows(path))

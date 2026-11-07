@@ -1,51 +1,37 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import UTC, date, datetime
-from decimal import Decimal, InvalidOperation
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from leltariv_domain.categories import DEFAULT_TYPES, suggest_type
-from leltariv_domain.normalization import (
-    is_meaningful_serial_number,
-    normalize_code,
-    normalize_text,
-)
-from leltariv_domain.xlsx_import import (
-    as_source_text,
-    excel_serial_to_date,
-    read_asset_rows,
-    zone_code_from_site,
+from leltariv_domain.categories import DEFAULT_TYPES
+from leltariv_domain.normalization import normalize_text
+from leltariv_infrastructure.asset_import import (
+    ZONE_NAMES,
+    ImportReport,
+    get_or_create_asset_type,
+    get_or_create_zone,
+    import_file,
+    link_accessories,
 )
 from leltariv_infrastructure.db.models import (
     AppUser,
     Asset,
-    AssetCode,
     AssetResponsible,
     AssetType,
-    ImportBatch,
     InventoryPeriod,
-    InventoryZone,
     Person,
     Room,
 )
 from leltariv_infrastructure.db.session import SessionLocal
-from sqlalchemy import func, select, update
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 SOURCE_FILES = (
     "261 lista_20260909.XLSX",
     "262 lista_20260909.XLSX",
 )
-
-ZONE_NAMES = {
-    "261": "Leltárkörzet 261",
-    "262": "Leltárkörzet 262",
-}
 
 DEMO_ROOMS: tuple[tuple[str, str, str], ...] = (
     ("261", "I-101", "Iroda"),
@@ -68,145 +54,6 @@ DEMO_PERSONS: tuple[str, ...] = (
 
 #: ennyi 262-es főeszköz kap demófelelőst, eszközszám szerint, körbeforgóan
 DEMO_RESPONSIBLE_COUNT = 40
-
-
-@dataclass(frozen=True)
-class SeedAsset:
-    asset_number: str
-    sub_number: int
-    inventory_number: str | None
-    original_asset: str | None
-    tax_ref: str | None
-    activated_on: date | None
-    name: str
-    name_normalized: str
-    gross_value: Decimal | None
-    accum_depreciation: Decimal | None
-    book_value: Decimal | None
-    currency: str
-    site_code: str
-    zone_code: str
-    serial_number: str | None
-    quantity: int
-
-
-def required_source_text(row: Mapping[str, object], column: str) -> str:
-    value = as_source_text(row.get(column))
-    if value is None:
-        raise ValueError(f"Hiányzó kötelező mező: {column}")
-    return value
-
-
-def optional_source_text(row: Mapping[str, object], column: str) -> str | None:
-    return as_source_text(row.get(column))
-
-
-def to_int(value: object, field_name: str) -> int:
-    if isinstance(value, bool):
-        raise ValueError(f"{field_name} nem lehet logikai érték.")
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-
-    text_value = as_source_text(value)
-    if text_value is None:
-        raise ValueError(f"Hiányzó vagy érvénytelen egész érték: {field_name}")
-
-    try:
-        return int(text_value)
-    except ValueError as error:
-        raise ValueError(f"Érvénytelen egész érték: {field_name}={value!r}") from error
-
-
-def to_decimal(value: object) -> Decimal | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, bool):
-        raise ValueError("A pénzügyi érték nem lehet logikai érték.")
-
-    try:
-        return Decimal(str(value).replace(" ", "").replace(",", "."))
-    except InvalidOperation as error:
-        raise ValueError(f"Érvénytelen pénzügyi érték: {value!r}") from error
-
-
-def row_to_seed_asset(row: Mapping[str, object]) -> SeedAsset:
-    asset_number = required_source_text(row, "Eszköz")
-    sub_number = to_int(row.get("Alszám"), "Alszám")
-    inventory_number = optional_source_text(row, "Leltárszám")
-    original_asset = optional_source_text(row, "Eredeti eszköz")
-    tax_ref = optional_source_text(row, "Adóhivatal")
-    activated_on = excel_serial_to_date(row.get("Aktiválás dátuma"))
-    name = required_source_text(row, "Eszköz megnevezése")
-    site_code = required_source_text(row, "Telephely")
-    serial_number = optional_source_text(row, "Gyártási szám")
-
-    raw_currency = optional_source_text(row, "Pénznem")
-    currency = normalize_code(raw_currency) if raw_currency else "HUF"
-
-    return SeedAsset(
-        asset_number=asset_number,
-        sub_number=sub_number,
-        inventory_number=inventory_number,
-        original_asset=original_asset,
-        tax_ref=tax_ref,
-        activated_on=activated_on,
-        name=name,
-        name_normalized=normalize_text(name),
-        gross_value=to_decimal(row.get("Besz.ért.")),
-        accum_depreciation=to_decimal(row.get("Kum. ÉCS")),
-        book_value=to_decimal(row.get("K.sz.ért")),
-        currency=currency,
-        site_code=site_code,
-        zone_code=zone_code_from_site(site_code),
-        serial_number=serial_number,
-        quantity=to_int(row.get("Mennyiség"), "Mennyiség"),
-    )
-
-
-def serial_number_can_be_code(serial_number: str | None) -> bool:
-    return is_meaningful_serial_number(serial_number)
-
-
-def asset_codes_for_seed(asset: SeedAsset) -> list[tuple[str, str, bool]]:
-    """Kereshető, zónán belül egyedi kódok: kód, típus, elsődleges-e."""
-    codes: list[tuple[str, str, bool]] = []
-    seen_normalized_codes: set[str] = set()
-
-    def add_code(code: str, code_type: str, is_primary: bool) -> None:
-        normalized = normalize_code(code)
-        if normalized in seen_normalized_codes:
-            return
-
-        seen_normalized_codes.add(normalized)
-        codes.append((code, code_type, is_primary))
-
-    if asset.inventory_number is not None:
-        add_code(asset.inventory_number, "LELTARSZAM", True)
-
-    add_code(asset.asset_number, "ESZKOZSZAM", False)
-
-    if serial_number_can_be_code(asset.serial_number):
-        assert asset.serial_number is not None
-        add_code(asset.serial_number, "GYARI_SZAM", False)
-
-    return codes
-
-
-def get_or_create_zone(session: Session, code: str) -> InventoryZone:
-    zone = session.scalar(select(InventoryZone).where(InventoryZone.code == code))
-    if zone is not None:
-        return zone
-
-    zone = InventoryZone(
-        code=code,
-        site_code=f"{code}0000000",
-        name=ZONE_NAMES.get(code, f"Leltárkörzet {code}"),
-    )
-    session.add(zone)
-    session.flush()
-    return zone
 
 
 def seed_demo_rooms(session: Session) -> int:
@@ -296,24 +143,6 @@ def type_counts(session: Session) -> list[tuple[str, int]]:
     return [(name, count) for name, count in rows]
 
 
-def get_or_create_asset_type(
-    session: Session,
-    *,
-    name: str,
-    name_normalized: str,
-) -> AssetType:
-    asset_type = session.scalar(
-        select(AssetType).where(AssetType.name_normalized == name_normalized)
-    )
-    if asset_type is not None:
-        return asset_type
-
-    asset_type = AssetType(name=name, name_normalized=name_normalized)
-    session.add(asset_type)
-    session.flush()
-    return asset_type
-
-
 def get_or_create_period(session: Session) -> InventoryPeriod:
     period = session.scalar(select(InventoryPeriod).where(InventoryPeriod.state == "ACTIVE"))
     if period is not None:
@@ -347,155 +176,6 @@ def seed_users(session: Session) -> None:
                     is_active=True,
                 )
             )
-
-
-def create_asset_codes(
-    session: Session,
-    *,
-    asset: Asset,
-    zone: InventoryZone,
-    seed_asset: SeedAsset,
-) -> None:
-    for code, code_type, is_primary in asset_codes_for_seed(seed_asset):
-        code_normalized = normalize_code(code)
-        existing = session.scalar(
-            select(AssetCode).where(
-                AssetCode.zone_id == zone.id,
-                AssetCode.code_normalized == code_normalized,
-            )
-        )
-
-        if existing is not None:
-            # Ugyanazon körzetben egy kód csak egy eszközhöz tartozhat.
-            # A korábbi importált rekord megmarad, a későbbi ütköző kód kimarad.
-            continue
-
-        session.add(
-            AssetCode(
-                id=uuid4(),
-                asset_id=asset.id,
-                zone_id=zone.id,
-                code=code,
-                code_normalized=code_normalized,
-                code_type=code_type,
-                is_primary=is_primary,
-            )
-        )
-
-
-def seed_file(session: Session, path: Path) -> tuple[int, int, int]:
-    rows_read = 0
-    rows_ok = 0
-    rows_failed = 0
-    errors: list[tuple[int, str]] = []
-    batch = ImportBatch(
-        id=uuid4(),
-        file_name=path.name,
-        source_system="SAP",
-        rows_read=0,
-        rows_ok=0,
-        rows_failed=0,
-        imported_at=datetime.now(UTC),
-    )
-    session.add(batch)
-    session.flush()
-
-    for row_number, row in read_asset_rows(path):
-        rows_read += 1
-
-        try:
-            with session.begin_nested():
-                seed_asset = row_to_seed_asset(row)
-                zone = get_or_create_zone(session, seed_asset.zone_code)
-                # A típus kategória, nem a megnevezés másolata; a javaslat kézzel felülírható.
-                type_name = suggest_type(seed_asset.name_normalized)
-                asset_type = get_or_create_asset_type(
-                    session,
-                    name=type_name,
-                    name_normalized=normalize_text(type_name),
-                )
-
-                existing_asset = session.scalar(
-                    select(Asset).where(
-                        Asset.asset_number == seed_asset.asset_number,
-                        Asset.sub_number == seed_asset.sub_number,
-                    )
-                )
-                if existing_asset is not None:
-                    raise ValueError(
-                        f"Duplikált eszköz-kulcs: {seed_asset.asset_number}/{seed_asset.sub_number}"
-                    )
-
-                asset = Asset(
-                    id=uuid4(),
-                    asset_number=seed_asset.asset_number,
-                    sub_number=seed_asset.sub_number,
-                    name=seed_asset.name,
-                    name_normalized=seed_asset.name_normalized,
-                    zone_id=zone.id,
-                    asset_type_id=asset_type.id,
-                    parent_asset_id=None,
-                    original_asset=seed_asset.original_asset,
-                    tax_ref=seed_asset.tax_ref,
-                    activated_on=seed_asset.activated_on,
-                    gross_value=seed_asset.gross_value,
-                    accum_depreciation=seed_asset.accum_depreciation,
-                    book_value=seed_asset.book_value,
-                    currency=seed_asset.currency,
-                    serial_number=seed_asset.serial_number,
-                    quantity=seed_asset.quantity,
-                    import_batch_id=batch.id,
-                )
-                session.add(asset)
-                session.flush()
-
-                create_asset_codes(
-                    session,
-                    asset=asset,
-                    zone=zone,
-                    seed_asset=seed_asset,
-                )
-
-            rows_ok += 1
-
-        except (IntegrityError, TypeError, ValueError) as error:
-            rows_failed += 1
-            errors.append((row_number, str(error)))
-
-    batch.rows_read = rows_read
-    batch.rows_ok = rows_ok
-    batch.rows_failed = rows_failed
-
-    if errors:
-        print(f"\n{path.name}: {len(errors)} hibás sor.")
-        for row_number, message in errors[:20]:
-            print(f"Sor {row_number}: {message}")
-    return rows_read, rows_ok, rows_failed
-
-
-def link_accessories(session: Session) -> int:
-    """A tartozékokat a főeszközükhöz köti, és visszaadja a létrejött kapcsolatok számát.
-
-    A forrásban az alszám hordozza a tartozékszerkezetet: a főeszköz alszáma 0, a
-    tartozékoké 1-től folytatólagos, ugyanazon eszközszám alatt. A kapcsolatot csak az
-    összes fájl beolvasása után lehet megállapítani, mert egy tartozék sora megelőzheti a
-    főeszközéét, és a főeszköz a másik körzet állományában is lehet.
-    """
-    parent = aliased(Asset)
-    parent_id = (
-        select(parent.id)
-        .where(parent.asset_number == Asset.asset_number, parent.sub_number == 0)
-        .scalar_subquery()
-    )
-
-    session.execute(update(Asset).where(Asset.sub_number > 0).values(parent_asset_id=parent_id))
-
-    linked = session.scalar(
-        select(func.count())
-        .select_from(Asset)
-        .where(Asset.sub_number > 0, Asset.parent_asset_id.is_not(None))
-    )
-    return linked or 0
 
 
 def get_source_dir() -> Path:
@@ -554,16 +234,24 @@ def main() -> None:
         seed_users(session)
         seed_default_types(session)
 
-        totals = [seed_file(session, path) for path in source_paths(source_dir)]
+        reports: list[ImportReport] = []
+        for path in source_paths(source_dir):
+            report = import_file(session, path, path.name)
+            reports.append(report)
+            if report.errors:
+                print(f"\n{path.name}: {len(report.errors)} hibás sor.")
+                for row_number, message in report.errors[:20]:
+                    print(f"Sor {row_number}: {message}")
+
         linked = link_accessories(session)
         rooms_created = seed_demo_rooms(session)
         persons_created, assigned = seed_demo_responsibles(session)
 
         session.commit()
 
-        rows_read = sum(total[0] for total in totals)
-        rows_ok = sum(total[1] for total in totals)
-        rows_failed = sum(total[2] for total in totals)
+        rows_read = sum(report.rows_read for report in reports)
+        rows_ok = sum(report.rows_ok for report in reports)
+        rows_failed = sum(report.rows_failed for report in reports)
 
         print(
             f"Seed kész: {rows_ok}/{rows_read} eszköz, {rows_failed} hibás sor, "
