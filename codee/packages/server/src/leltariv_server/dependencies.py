@@ -7,7 +7,7 @@ hozna létre az eszközlista és a körzetek között, aminek semmi köze a tart
 
 from typing import Annotated
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, HTTPException, status
 from leltariv_infrastructure.db.models import AppUser
 from leltariv_infrastructure.db.session import get_db_session
 from sqlalchemy.orm import Session
@@ -21,3 +21,13 @@ def require_current_user(
 ) -> AppUser:
     """A kérés Bearer tokenjéhez tartozó aktív felhasználó, vagy 401."""
     return get_current_user(authorization, session)
+
+
+def require_admin(user: AppUser = Depends(require_current_user)) -> AppUser:  # noqa: B008
+    """Csak rendszergazda: az import és a visszatöltés az egész adatbázist érinti."""
+    if user.role != "ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Ehhez rendszergazdai jogosultság kell.",
+        )
+    return user

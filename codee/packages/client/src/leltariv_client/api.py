@@ -1,9 +1,12 @@
 import time
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Protocol
+from urllib.parse import quote
 from uuid import UUID, uuid4
 
 import httpx
+from leltariv_contracts.admin import ImportResult, RestoreResult, SnapshotOut
 from leltariv_contracts.assets import (
     AssetDetail,
     AssetListItem,
@@ -18,6 +21,8 @@ from leltariv_contracts.zones import ZoneOut
 
 API_PREFIX = "/api/v1"
 TIMEOUT_SECONDS = 10.0
+#: import és visszatöltés: az egész adatbázist érinti, másodpercekig is eltarthat
+LONG_TIMEOUT_SECONDS = 300.0
 
 
 class ApiClient(Protocol):
@@ -58,6 +63,10 @@ class ApiClient(Protocol):
     ) -> ScanOut: ...
     def undo_scan(self, token: str, session_id: UUID, scan_id: UUID) -> ScanOut: ...
     def close_session(self, token: str, session_id: UUID) -> SessionOut: ...
+    def import_xlsx(self, token: str, path: Path) -> ImportResult: ...
+    def get_snapshots(self, token: str) -> list[SnapshotOut]: ...
+    def create_snapshot(self, token: str, label: str | None) -> SnapshotOut: ...
+    def restore_snapshot(self, token: str, file_name: str) -> RestoreResult: ...
 
 
 class HttpApiClient:
@@ -82,12 +91,22 @@ class HttpApiClient:
         token: str | None = None,
         json: dict[str, object] | None = None,
         params: dict[str, str | int] | None = None,
+        content: bytes | None = None,
+        timeout: float = TIMEOUT_SECONDS,
     ) -> object:
         headers = {"Authorization": f"Bearer {token}"} if token else {}
+        if content is not None:
+            headers["Content-Type"] = "application/octet-stream"
 
         try:
             response = self._client.request(
-                method, f"{API_PREFIX}{path}", headers=headers, json=json, params=params
+                method,
+                f"{API_PREFIX}{path}",
+                headers=headers,
+                json=json,
+                params=params,
+                content=content,
+                timeout=timeout,
             )
         except httpx.RequestError as error:
             raise ValueError(
@@ -220,6 +239,36 @@ class HttpApiClient:
     def close_session(self, token: str, session_id: UUID) -> SessionOut:
         payload = self._request("POST", f"/sessions/{session_id}/close", token=token)
         return SessionOut.model_validate(payload)
+
+    def import_xlsx(self, token: str, path: Path) -> ImportResult:
+        payload = self._request(
+            "POST",
+            "/imports",
+            token=token,
+            params={"file_name": path.name},
+            content=path.read_bytes(),
+            timeout=LONG_TIMEOUT_SECONDS,
+        )
+        return ImportResult.model_validate(payload)
+
+    def get_snapshots(self, token: str) -> list[SnapshotOut]:
+        payload = self._request("GET", "/snapshots", token=token)
+        return [SnapshotOut.model_validate(item) for item in payload]  # type: ignore[union-attr]
+
+    def create_snapshot(self, token: str, label: str | None) -> SnapshotOut:
+        payload = self._request(
+            "POST", "/snapshots", token=token, json={"label": label}, timeout=LONG_TIMEOUT_SECONDS
+        )
+        return SnapshotOut.model_validate(payload)
+
+    def restore_snapshot(self, token: str, file_name: str) -> RestoreResult:
+        payload = self._request(
+            "POST",
+            f"/snapshots/{quote(file_name)}/restore",
+            token=token,
+            timeout=LONG_TIMEOUT_SECONDS,
+        )
+        return RestoreResult.model_validate(payload)
 
 
 #: a hamis kliens állománya; a leltárszámok szándékosan körzetenként különböznek

@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from leltariv_client.api import HttpApiClient
 from leltariv_client.dialogs import AssetDetailDialog
+from leltariv_client.pages.admin import AdminPage
 from leltariv_client.pages.rooms import RoomsPage
 from leltariv_client.pages.scanning import ScanningPage
 from leltariv_client.worker import Worker
@@ -205,6 +206,9 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.asset_page)
         self.stack.addWidget(ScanningPage(api, token))
         self.stack.addWidget(RoomsPage(api, token))
+        self.admin_page = AdminPage(api, token)
+        self.admin_page.data_changed.connect(self.reload_data)
+        self.stack.addWidget(self.admin_page)
         self.stack.setCurrentIndex(1)
         v_layout.addWidget(self.stack)
         h_layout.addLayout(v_layout)
@@ -215,15 +219,24 @@ class MainWindow(QMainWindow):
         self.load_metadata()
 
     def on_nav_changed(self, i: int):
-        # 1 = Eszközök, 2 = Leltározás, 3 = Helyiségek; a többi 0
-        if i == 1:
-            self.stack.setCurrentIndex(1)
-        elif i == 2:
-            self.stack.setCurrentIndex(2)
-        elif i == 3:
-            self.stack.setCurrentIndex(3)
+        # 1 = Eszközök, 2 = Leltározás, 3 = Helyiségek, 5 = Adminisztráció; a többi 0
+        if i in (1, 2, 3):
+            self.stack.setCurrentIndex(i)
+        elif i == 5:
+            self.stack.setCurrentIndex(4)
         else:
             self.stack.setCurrentIndex(0)
+
+    def reload_data(self):
+        # Import vagy visszatöltés után a körzetek, típusok és felelősök is változhattak.
+        for combo in (self.zone_combo, self.room_combo, self.type_combo, self.person_combo):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("Mind", None)
+            combo.blockSignals(False)
+        self.room_combo.setEnabled(False)
+        self.load_metadata()
+        self.load_zones()  # a végén az első oldalt is újra kéri
 
     def create_asset_page(self):
         page = QWidget()
