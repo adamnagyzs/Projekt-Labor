@@ -2,7 +2,8 @@
 
 Csak akkor fut, ha a `TEST_DATABASE_URL` be van állítva egy migrált adatbázisra (a CI-ban
 igen). Minden teszt egy tranzakcióban fut, és a végén visszagörgetjük, ezért a meglévő
-adatból semmi nem változik; a végpontok commitja is csak egy mentési pontot zár le.
+adatból semmi nem változik. A végpontokat függvényként hívjuk ugyanezzel a munkamenettel;
+a commitjuk csak egy mentési pontot zár le.
 Szándékosan nem a `DATABASE_URL`: az a fejlesztői adatbázis, azt teszt nem írhatja.
 """
 
@@ -14,7 +15,8 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
+from leltariv_contracts.inventory import PeriodCreate
 from leltariv_infrastructure.db.models import (
     AppUser,
     Asset,
@@ -25,9 +27,8 @@ from leltariv_infrastructure.db.models import (
     Room,
     Scan,
 )
-from leltariv_infrastructure.db.session import get_db_session
-from leltariv_server.dependencies import require_admin, require_current_user
-from leltariv_server.main import app
+from leltariv_server.api.history import get_asset_history
+from leltariv_server.api.periods import close_period, create_period, get_comparison
 from leltariv_server.services.comparison import build_comparison
 from sqlalchemy import create_engine, text, update
 from sqlalchemy.exc import IntegrityError
@@ -74,17 +75,6 @@ def user(db: Session) -> AppUser:
     db.add(user)
     db.flush()
     return user
-
-
-@pytest.fixture
-def client(db: Session, user: AppUser) -> Generator[TestClient, None, None]:
-    app.dependency_overrides[get_db_session] = lambda: db
-    app.dependency_overrides[require_current_user] = lambda: user
-    app.dependency_overrides[require_admin] = lambda: user
-    try:
-        yield TestClient(app)
-    finally:
-        app.dependency_overrides.clear()
 
 
 def zone(db: Session) -> InventoryZone:
@@ -291,31 +281,29 @@ def test_comparison(db: Session) -> None:
     assert (closed[missing.id].category, closed[missing.id].status) == ("MISSING", "ACTIVE")
 
 
-def test_period_endpoints(db: Session, client: TestClient) -> None:
-    created = client.post("/api/v1/periods", json={"name": "2027. évi leltár", "year": 2027})
-    assert created.status_code == 201
-    assert created.json()["state"] == "ACTIVE"
+def test_period_endpoints(db: Session, user: AppUser) -> None:
+    created = create_period(PeriodCreate(name="2027. évi leltár", year=2027), user, db)
+    assert created.state == "ACTIVE"
 
-    again = client.post("/api/v1/periods", json={"name": "Még egy", "year": 2027})
-    assert again.status_code == 409
+    with pytest.raises(HTTPException) as again:
+        create_period(PeriodCreate(name="Még egy", year=2027), user, db)
+    assert again.value.status_code == 409
 
     home = zone(db)
-    db.add(InventorySession(period_id=created.json()["id"], zone_id=home.id, started_at=NOW))
+    db.add(InventorySession(period_id=created.id, zone_id=home.id, started_at=NOW))
     db.flush()
 
-    closed = client.post(f"/api/v1/periods/{created.json()['id']}/close")
-    assert closed.status_code == 200
-    assert closed.json()["state"] == "CLOSED"
-    assert client.post(f"/api/v1/periods/{created.json()['id']}/close").status_code == 409
+    # a nyitott munkamenetet a lezárás maga zárja le
+    assert close_period(created.id, user, db).state == "CLOSED"
+    with pytest.raises(HTTPException) as twice:
+        close_period(created.id, user, db)
+    assert twice.value.status_code == 409
 
-    comparison = client.get(
-        f"/api/v1/periods/{created.json()['id']}/comparison", params={"zone_code": home.code}
-    )
-    assert comparison.status_code == 200
-    assert comparison.json()["summary"]["expected_assets"] == 0
+    comparison = get_comparison(created.id, home.code, user, db)
+    assert comparison.summary.expected_assets == 0
 
 
-def test_history_endpoint(db: Session, client: TestClient, user: AppUser) -> None:
+def test_history_endpoint(db: Session, user: AppUser) -> None:
     home = zone(db)
     current = period(db)
     work = InventorySession(period_id=current.id, zone_id=home.id, started_at=NOW)
@@ -335,13 +323,13 @@ def test_history_endpoint(db: Session, client: TestClient, user: AppUser) -> Non
     )
     db.flush()
 
-    response = client.get(f"/api/v1/assets/{item.id}/history")
-    assert response.status_code == 200
-    entries = response.json()
-    assert sorted(entry["kind"] for entry in entries) == ["CREATED", "SCAN", "STATUS", "UNDO"]
-    assert entries[-1]["kind"] == "CREATED"  # a legrégebbi a végén
-    status = next(entry for entry in entries if entry["kind"] == "STATUS")
-    assert status["text"] == "Állapot: Aktív → Elveszett. Indoklás: Nem került elő"
-    assert status["by"] == "Teszt Admin"
+    entries = get_asset_history(item.id, user, db)
+    assert sorted(entry.kind for entry in entries) == ["CREATED", "SCAN", "STATUS", "UNDO"]
+    assert entries[-1].kind == "CREATED"  # a legrégebbi a végén
+    status = next(entry for entry in entries if entry.kind == "STATUS")
+    assert status.text == "Állapot: Aktív → Elveszett. Indoklás: Nem került elő"
+    assert status.by == "Teszt Admin"
 
-    assert client.get(f"/api/v1/assets/{uuid4()}/history").status_code == 404
+    with pytest.raises(HTTPException) as unknown:
+        get_asset_history(uuid4(), user, db)
+    assert unknown.value.status_code == 404
