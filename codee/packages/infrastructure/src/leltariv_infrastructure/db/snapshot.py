@@ -12,11 +12,10 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Column, Connection, Integer, insert, select, text, update
+from sqlalchemy import Column, Connection, Integer, insert, select, text
 from sqlalchemy.orm import Session
 
 from leltariv_infrastructure.db.base import Base
-from leltariv_infrastructure.db.models import InventorySession
 
 FORMAT = "leltariv-snapshot"
 
@@ -63,9 +62,12 @@ def from_json(column: Column[Any], value: Any) -> Any:
 def restore(session: Session, data: dict[str, Any]) -> dict[str, int]:
     """Az adatbázis tartalmát lecseréli a pillanatképére; a commit a hívóé.
 
-    A TRUNCATE szándékosan kerüli meg a `scan` tábla append-only triggerét, ami soronként
-    tiltja a törlést: a visszatöltés a teljes állapotot cseréli, a naplót is. Ezért a hívó
-    előtte mindig pillanatképet ment a mostani állapotról.
+    A visszatöltés a teljes állapotot cseréli, a naplókat is, ezért megkerüli a történetet
+    őrző triggereket (append-only napló, nem törölhető eszköz, lezárt időszak). A TRUNCATE
+    eleve nem soronkénti, a betöltés idejére pedig a saját triggereinket kikapcsoljuk; az
+    idegen kulcsok ellenőrzése közben is él. Az ALTER TABLE tranzakciós: hiba esetén a
+    triggerek a visszagörgetéssel együtt visszakapcsolnak. A hívó előtte mindig
+    pillanatképet ment a mostani állapotról.
     """
     if data.get("format") != FORMAT:
         raise ValueError("A fájl nem Leltárív-pillanatkép.")
@@ -78,19 +80,16 @@ def restore(session: Session, data: dict[str, Any]) -> dict[str, int]:
 
     tables = Base.metadata.sorted_tables
     session.execute(text(f"TRUNCATE {', '.join(t.name for t in tables)} RESTART IDENTITY"))
+    for table in tables:
+        session.execute(text(f"ALTER TABLE {table.name} DISABLE TRIGGER USER"))
 
     counts: dict[str, int] = {}
-    closed_sessions: list[tuple[UUID, datetime]] = []
     for table in tables:
         columns: dict[str, Column[Any]] = {column.name: column for column in table.columns}
         rows = [
             {name: from_json(columns[name], value) for name, value in row.items()}
             for row in data["tables"].get(table.name, [])
         ]
-        if table is InventorySession.__table__:
-            # Lezárt munkamenetbe a trigger nem enged beolvasást: a lezárás a sorok után jön.
-            closed_sessions = [(r["id"], r["closed_at"]) for r in rows if r["closed_at"]]
-            rows = [{**r, "closed_at": None} for r in rows]
         # Önmagára hivatkozó tábla (tartozék, visszavonás): a hivatkozott sor menjen előbb.
         self_refs = [fk.parent.name for fk in table.foreign_keys if fk.column.table is table]
         rows.sort(key=lambda r: any(r[name] is not None for name in self_refs))
@@ -98,12 +97,8 @@ def restore(session: Session, data: dict[str, Any]) -> dict[str, int]:
             session.execute(insert(table), rows)
         counts[table.name] = len(rows)
 
-    for session_id, closed_at in closed_sessions:
-        session.execute(
-            update(InventorySession)
-            .where(InventorySession.id == session_id)
-            .values(closed_at=closed_at)
-        )
+    for table in tables:
+        session.execute(text(f"ALTER TABLE {table.name} ENABLE TRIGGER USER"))
 
     # Az egész számú azonosítók sorszámlálója a betöltött legnagyobb értéktől folytatódjon.
     for table in tables:
