@@ -1,12 +1,14 @@
 from typing import Literal, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import status as http_status
 from leltariv_contracts.assets import (
     AssetCodeOut,
     AssetDetail,
     AssetListItem,
     AssetPage,
+    AssetStatus,
     CodeType,
     PersonOut,
 )
@@ -106,6 +108,7 @@ def asset_list_item(
         serial_number=asset.serial_number,
         asset_type=asset_type,
         responsible=responsible,
+        status=cast(AssetStatus, asset.status),
     )
 
 
@@ -170,6 +173,7 @@ def list_assets(
     ),
     _current_user: object = Depends(require_current_user),  # noqa: B008
     session: Session = Depends(get_db_session),  # noqa: B008
+    status: AssetStatus | None = None,
 ) -> AssetPage:
     """Körzetre szűrt, név- és kódkeresést támogató eszközlista.
 
@@ -184,7 +188,7 @@ def list_assets(
         inventory_zone = session.scalar(select(InventoryZone).where(InventoryZone.code == zone))
         if inventory_zone is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=http_status.HTTP_404_NOT_FOUND,
                 detail="A megadott körzet nem található.",
             )
         zone_id = inventory_zone.id
@@ -192,6 +196,9 @@ def list_assets(
 
     if asset_type_id is not None:
         filters.append(Asset.asset_type_id == asset_type_id)
+
+    if status is not None:
+        filters.append(Asset.status == status)
 
     if room_id is not None:
         in_room = room_scans().where(Scan.room_id == room_id).with_only_columns(Scan.asset_id)
@@ -271,7 +278,7 @@ def asset_detail(session: Session, asset_id: UUID) -> AssetDetail:
 
     if row is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=http_status.HTTP_404_NOT_FOUND,
             detail="A megadott eszköz nem található.",
         )
 
@@ -351,6 +358,7 @@ def asset_detail(session: Session, asset_id: UUID) -> AssetDetail:
         ),
         codes=codes,
         accessories=accessories,
+        status=cast(AssetStatus, asset.status),
     )
 
 
