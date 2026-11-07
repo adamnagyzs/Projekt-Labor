@@ -15,7 +15,7 @@ from leltariv_contracts.assets import (
     PersonOut,
 )
 from leltariv_contracts.auth import LoginRequest, LoginResponse
-from leltariv_contracts.inventory import ScanOut, SessionOut
+from leltariv_contracts.inventory import PeriodOut, ScanOut, SessionOut
 from leltariv_contracts.rooms import RoomOut
 from leltariv_contracts.zones import ZoneOut
 
@@ -67,6 +67,9 @@ class ApiClient(Protocol):
     def get_snapshots(self, token: str) -> list[SnapshotOut]: ...
     def create_snapshot(self, token: str, label: str | None) -> SnapshotOut: ...
     def restore_snapshot(self, token: str, file_name: str) -> RestoreResult: ...
+    def get_periods(self, token: str) -> list[PeriodOut]: ...
+    def create_period(self, token: str, name: str, year: int) -> PeriodOut: ...
+    def close_period(self, token: str, period_id: UUID) -> PeriodOut: ...
 
 
 class HttpApiClient:
@@ -269,6 +272,18 @@ class HttpApiClient:
             timeout=LONG_TIMEOUT_SECONDS,
         )
         return RestoreResult.model_validate(payload)
+
+    def get_periods(self, token: str) -> list[PeriodOut]:
+        payload = self._request("GET", "/periods", token=token)
+        return [PeriodOut.model_validate(item) for item in payload]  # type: ignore[union-attr]
+
+    def create_period(self, token: str, name: str, year: int) -> PeriodOut:
+        payload = self._request("POST", "/periods", token=token, json={"name": name, "year": year})
+        return PeriodOut.model_validate(payload)
+
+    def close_period(self, token: str, period_id: UUID) -> PeriodOut:
+        payload = self._request("POST", f"/periods/{period_id}/close", token=token)
+        return PeriodOut.model_validate(payload)
 
 
 #: a hamis kliens állománya; a leltárszámok szándékosan körzetenként különböznek

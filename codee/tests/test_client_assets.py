@@ -52,6 +52,9 @@ class FakeApi:
         self.types.append(new)
         return new
 
+    def get_periods(self, token: str) -> list[object]:
+        return []
+
     def get_snapshots(self, token: str) -> list[object]:
         return []
 

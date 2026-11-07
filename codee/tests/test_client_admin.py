@@ -1,8 +1,10 @@
 from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
 import pytest
 from leltariv_client.pages.admin import AdminPage
 from leltariv_contracts.admin import RestoreResult, SnapshotOut
+from leltariv_contracts.inventory import PeriodOut
 from PySide6.QtWidgets import QMessageBox
 from pytestqt.qtbot import QtBot
 
@@ -17,6 +19,30 @@ class AdminTestApi:
             )
         ]
         self.restored: list[str] = []
+        self.periods = [
+            PeriodOut(
+                id=uuid4(),
+                name="2026. évi leltár",
+                year=2026,
+                state="ACTIVE",
+                opened_at=datetime(2026, 9, 9, 8, 0, tzinfo=UTC),
+            )
+        ]
+
+    def get_periods(self, token: str) -> list[PeriodOut]:
+        return list(self.periods)
+
+    def close_period(self, token: str, period_id: UUID) -> PeriodOut:
+        closed = self.periods[0].model_copy(
+            update={"state": "CLOSED", "closed_at": datetime(2026, 11, 7, tzinfo=UTC)}
+        )
+        self.periods[0] = closed
+        return closed
+
+    def create_period(self, token: str, name: str, year: int) -> PeriodOut:
+        period = PeriodOut(id=uuid4(), name=name, year=year, state="ACTIVE")
+        self.periods.insert(0, period)
+        return period
 
     def get_snapshots(self, token: str) -> list[SnapshotOut]:
         return list(self.snapshots)
@@ -93,3 +119,29 @@ def test_restore_needs_confirmation(qtbot: QtBot, monkeypatch: pytest.MonkeyPatc
     with qtbot.waitSignal(page.data_changed):
         page.restore_button.click()
     assert api.restored == ["2026-10-20_10-00-00_kezdo.json"]
+
+
+def test_active_period_can_be_closed_then_a_new_one_opened(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page, api = open_page(qtbot)
+    qtbot.waitUntil(lambda: page.close_period_button.isEnabled())
+    assert "Aktív: 2026. évi leltár" in page.period_label.text()
+    assert not page.open_period_button.isEnabled()
+
+    monkeypatch.setattr(QMessageBox, "question", answer_no)
+    page.close_period_button.click()
+    assert api.periods[0].state == "ACTIVE"
+
+    monkeypatch.setattr(QMessageBox, "question", answer_yes)
+    page.close_period_button.click()
+    qtbot.waitUntil(lambda: page.open_period_button.isEnabled())
+    assert api.periods[0].state == "CLOSED"
+    assert "Nincs aktív időszak" in page.period_label.text()
+
+    # üres névnél az évből képzett név
+    page.period_year_input.setValue(2027)
+    page.open_period_button.click()
+    qtbot.waitUntil(lambda: page.close_period_button.isEnabled())
+    assert api.periods[0].name == "2027. évi leltár"
+    assert "Aktív: 2027. évi leltár" in page.period_label.text()
