@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from leltariv_contracts.assets import STATUS_LABELS
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
     QComboBox,
@@ -20,7 +21,7 @@ from leltariv_client.worker import Worker
 
 
 class AssetDetailDialog(QDialog):
-    """Egy eszköz adatlapja a kódjaival, tartozékaival, típusával és felelősével."""
+    """Egy eszköz adatlapja a kódjaival, tartozékaival, típusával, felelősével, állapotával és előzményeivel."""
 
     def __init__(self, api, token, asset_id, parent=None):
         super().__init__(parent)
@@ -29,17 +30,27 @@ class AssetDetailDialog(QDialog):
         self.asset_id = asset_id
         self.loaded_accessories = []
         self.current_detail = None
-        #: mentettek-e az adatlapon; a lista ebből tudja, kell-e újratöltenie
         self.saved = False
-        #: az „Új típus…" után ezt a típust választjuk ki és mentjük, amikor a lista visszaér
         self.pending_type_id: int | None = None
 
         self.setWindowTitle("Eszköz adatlapja")
-        self.resize(550, 650)
+        self.resize(550, 750)
 
         layout = QVBoxLayout(self)
         self.info_label = QLabel("Adatok betöltése folyamatban...")
         layout.addWidget(self.info_label)
+
+        # 1. Státusz / Állapot és módosító gomb sora
+        status_layout = QHBoxLayout()
+        status_layout.addWidget(QLabel("<b>Állapot:</b>"))
+        self.lbl_status = QLabel("Aktív")
+        status_layout.addWidget(self.lbl_status)
+        status_layout.addStretch()
+
+        self.btn_change_status = QPushButton("Állapot módosítása…")
+        self.btn_change_status.clicked.connect(self.open_status_dialog)
+        status_layout.addWidget(self.btn_change_status)
+        layout.addLayout(status_layout)
 
         room_layout = QHBoxLayout()
         room_layout.addWidget(QLabel("<b>Helyiség (aktív):</b>"))
@@ -80,6 +91,11 @@ class AssetDetailDialog(QDialog):
         layout.addWidget(QLabel("Tartozékok (dupla kattintással megnyitható):"))
         layout.addWidget(self.accessories_list)
 
+        # 2. Előzmények szakasz az alján
+        layout.addWidget(QLabel("<b>Előzmények:</b>"))
+        self.history_list = QListWidget()
+        layout.addWidget(self.history_list)
+
         btn_close = QPushButton("Bezárás")
         btn_close.clicked.connect(self.accept)
         layout.addWidget(btn_close)
@@ -87,7 +103,6 @@ class AssetDetailDialog(QDialog):
         self.load_metadata_and_asset()
 
     def load_metadata_and_asset(self):
-        """Betölti a legördülőkhöz szükséges listákat a háttérben."""
         w_types = Worker(self.api.get_asset_types, self.token)
         w_types.signals.finished.connect(self.on_types_loaded)
         w_types.signals.error.connect(self.on_error)
@@ -99,10 +114,17 @@ class AssetDetailDialog(QDialog):
         QThreadPool.globalInstance().start(w_persons)
 
     def load_asset_details(self):
+        # Eszköz részletek lekérése
         worker = Worker(self.api.get_asset, self.token, self.asset_id)
         worker.signals.finished.connect(self.on_loaded)
         worker.signals.error.connect(self.on_error)
         QThreadPool.globalInstance().start(worker)
+
+        # Eszköz előzmények lekérése
+        h_worker = Worker(self.api.get_asset_history, self.token, self.asset_id)
+        h_worker.signals.finished.connect(self.on_history_loaded)
+        h_worker.signals.error.connect(self.on_error)
+        QThreadPool.globalInstance().start(h_worker)
 
     def _fill_types(self, types):
         self.type_combo.clear()
@@ -111,24 +133,16 @@ class AssetDetailDialog(QDialog):
 
     def on_types_loaded(self, types):
         self._fill_types(types)
-        # Ha a típusok megvannak, betöltjük az eszközt is
         self.load_asset_details()
 
     def on_persons_loaded(self, persons):
         self.resp_combo.clear()
         self.resp_combo.addItem("— nincs —", None)
-        # Szövegként tároljuk: a QComboBox.findData a UUID-ot nem egyenlőség, hanem azonosság
-        # szerint keresné, és a szerver válaszából mindig új objektum jön.
         for p in persons:
             self.resp_combo.addItem(p.name, str(p.id))
         self._select_current()
 
     def _select_current(self):
-        """A legördülőkben a jelenlegi típus és felelős.
-
-        A személyek és az adatlap két külön kérés, bármelyik érkezhet előbb; ezért mindkét
-        válasz után lefut, és csak azt állítja, amihez már minden adat megvan.
-        """
         detail = self.current_detail
         if detail is None:
             return
@@ -151,6 +165,8 @@ class AssetDetailDialog(QDialog):
             f"Aktiválva: {detail.activated_on or '-'}"
         )
 
+        status_text = STATUS_LABELS.get(detail.status, detail.status) if hasattr(detail, "status") else "Aktív"
+        self.lbl_status.setText(status_text)
         self.lbl_room.setText(detail.room or "még nem olvasták be")
         self._select_current()
 
@@ -167,6 +183,55 @@ class AssetDetailDialog(QDialog):
         for acc in self.loaded_accessories:
             self.accessories_list.addItem(f"{acc.asset_number}/{acc.sub_number} – {acc.name}")
 
+    def on_history_loaded(self, history_entries):
+        self.history_list.clear()
+        if not history_entries:
+            self.history_list.addItem("Nincs előzmény.")
+            return
+        for entry in history_entries:
+            time_str = entry.at.astimezone().strftime("%Y.%m.%d. %H:%M")
+            by_str = f" ({entry.by})" if entry.by else ""
+            line = f"{time_str} · {entry.text}{by_str}"
+            self.history_list.addItem(line)
+
+    def open_status_dialog(self):
+        new_status, ok = QInputDialog.getItem(
+            self,
+            "Állapot módosítása",
+            "Válaszd ki az új állapotot:",
+            list(STATUS_LABELS.values()),
+            0,
+            False,
+        )
+        if not ok:
+            return
+        
+        rev_labels = {v: k for k, v in STATUS_LABELS.items()}
+        selected_status_key = rev_labels.get(new_status, "ACTIVE")
+
+        reason, ok_reason = QInputDialog.getText(
+            self, "Indoklás", "Add meg a státuszváltás indokát (max 500 kar.):"
+        )
+        if not ok_reason or not reason.strip():
+            QMessageBox.warning(self, "Figyelmeztetés", "Az indoklás megadása kötelező!")
+            return
+
+        worker = Worker(
+            self.api.change_asset_status,
+            self.token,
+            self.asset_id,
+            selected_status_key,
+            reason.strip(),
+        )
+        worker.signals.finished.connect(self.on_status_changed)
+        worker.signals.error.connect(self.on_error)
+        QThreadPool.globalInstance().start(worker)
+
+    def on_status_changed(self, result):
+        self.saved = True
+        QMessageBox.information(self, "Siker", "Az állapot sikeresen módosítva.")
+        self.load_asset_details()
+
     def save_asset_type(self):
         selected_type_id = self.type_combo.currentData()
         if selected_type_id is None:
@@ -177,7 +242,6 @@ class AssetDetailDialog(QDialog):
         QThreadPool.globalInstance().start(worker)
 
     def on_type_saved(self, updated_detail):
-        # Az adatlap nyitva marad, hogy ugyanott a felelőst is be lehessen állítani.
         self.saved = True
         self.on_loaded(updated_detail)
         QMessageBox.information(self, "Siker", "A típus sikeresen mentve.")
@@ -191,7 +255,6 @@ class AssetDetailDialog(QDialog):
             QThreadPool.globalInstance().start(worker)
 
     def on_new_type_created(self, new_type):
-        # Kötött metódus kell, nem beágyazott függvény: csak így fut a válasz a felületi szálon.
         self.pending_type_id = new_type.id
         worker = Worker(self.api.get_asset_types, self.token)
         worker.signals.finished.connect(self.on_types_reloaded)

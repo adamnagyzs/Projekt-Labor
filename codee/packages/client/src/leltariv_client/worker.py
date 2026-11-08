@@ -22,7 +22,13 @@ class Worker(QRunnable):
     def run(self) -> None:
         try:
             result = self.fn(*self.args, **self.kwargs)
-            self.signals.finished.emit(result)
+            try:
+                self.signals.finished.emit(result)
+            except RuntimeError:
+                pass
         except Exception as e:
             traceback.print_exc()
-            self.signals.error.emit(str(e))
+            try:
+                self.signals.error.emit(str(e))
+            except RuntimeError:
+                pass
