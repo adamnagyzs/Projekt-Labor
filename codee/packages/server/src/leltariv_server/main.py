@@ -11,6 +11,7 @@ from leltariv_server.api.periods import router as periods_router
 from leltariv_server.api.persons import router as persons_router
 from leltariv_server.api.rooms import router as rooms_router
 from leltariv_server.api.snapshots import router as snapshots_router
+from leltariv_server.api.statuses import router as statuses_router
 from leltariv_server.api.zones import router as zones_router
 
 app = FastAPI(
@@ -31,3 +32,4 @@ app.include_router(imports_router)
 app.include_router(snapshots_router)
 app.include_router(periods_router)
 app.include_router(history_router)
+app.include_router(statuses_router)

@@ -139,3 +139,44 @@ LEFT JOIN asset_responsible
     ON asset_responsible.person_id = person.id
 GROUP BY person.name
 ORDER BY person.name;
+
+-- 7. Állapotonként hány eszköztétel van, körzetenként?
+-- Minden eszközsor egy tétel. A körzet nélküli eszközök külön csoportba kerülnek.
+
+SELECT
+    COALESCE(inventory_zone.code, 'Nincs körzet') AS korzet,
+    asset.status AS allapot,
+    COUNT(*) AS tetelek_szama
+FROM asset
+LEFT JOIN inventory_zone
+    ON inventory_zone.id = asset.zone_id
+GROUP BY inventory_zone.code, asset.status
+ORDER BY inventory_zone.code NULLS LAST, asset.status;
+
+-- 8. Egy eszköz állapotnaplója, a legrégebbi váltással kezdve.
+-- A belső SELECT az első naplózott eszközt választja ki. Másik eszközhöz
+-- a zárójeles lekérdezés helyére írd az eszköz azonosítóját, például '…'::uuid.
+-- A rögzítő neve üres, ha a naplóbejegyzéshez nem tartozik felhasználó.
+
+SELECT
+    asset_status_change.asset_id AS eszkoz_id,
+    asset_status_change.changed_at AS valtas_ideje,
+    asset_status_change.old_status AS elozo_allapot,
+    asset_status_change.new_status AS uj_allapot,
+    asset_status_change.reason AS indoklas,
+    app_user.display_name AS rogzitette
+FROM asset_status_change
+LEFT JOIN app_user
+    ON app_user.id = asset_status_change.changed_by
+WHERE asset_status_change.asset_id = (
+    SELECT asset_id
+    FROM asset_status_change
+    ORDER BY changed_at, id
+    LIMIT 1
+)
+ORDER BY asset_status_change.changed_at, asset_status_change.id;
+
+-- Törlési próba egy létező azonosítóval (csak tesztadatbázison):
+-- DELETE FROM asset WHERE id = '…'::uuid;
+-- ERROR: asset: a sor nem torolheto/modosithato, a tortenet resze
+-- SQL state: 23514
