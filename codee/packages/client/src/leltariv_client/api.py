@@ -32,6 +32,7 @@ from leltariv_contracts.zones import ZoneOut
 
 API_PREFIX = "/api/v1"
 TIMEOUT_SECONDS = 10.0
+#: import és visszatöltés: az egész adatbázist érinti, másodpercekig is eltarthat
 LONG_TIMEOUT_SECONDS = 300.0
 
 
@@ -89,6 +90,15 @@ class ApiClient(Protocol):
 
 
 class HttpApiClient:
+    """A valódi szerverrel beszélő kliens.
+
+    A válaszokat ugyanazokba a Pydantic modellekbe olvassuk be, amikkel a szerver
+    validál, tehát ha a szerződés megváltozik, az itt derül ki, nem a felületen.
+
+    Minden metódus `ValueError`-t dob a felhasználónak szánt üzenettel; a hívó
+    munkaszál ezt fogja meg és jeleníti meg. Hálózati kód nem kerül a UI szálra.
+    """
+
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
         self._client = httpx.Client(base_url=self.base_url, timeout=TIMEOUT_SECONDS)
@@ -128,6 +138,7 @@ class HttpApiClient:
                 return {}
             return response.json()
 
+        # A FastAPI hibaválasza {"detail": "..."} — ha mégsem az jön, a státuszt mutatjuk.
         try:
             detail = response.json().get("detail")
         except ValueError:
@@ -165,6 +176,7 @@ class HttpApiClient:
             params["zone"] = zone
         if q:
             params["q"] = q
+        # Csak a bekapcsolt szűrő megy át; a szerver alapértéke amúgy is false.
         if main_only:
             params["main_only"] = "true"
         if multi_only:
@@ -317,6 +329,7 @@ class HttpApiClient:
         return StatusChangeOut.model_validate(payload)
 
 
+#: a hamis kliens állománya; a leltárszámok szándékosan körzetenként különböznek
 FAKE_ASSETS = [
     AssetListItem(
         id=uuid4(),
@@ -378,6 +391,8 @@ FAKE_ASSETS = [
 
 
 class FakeApiClient:
+    """Szerver nélküli kliens a felület kipróbálásához; a szerver szabályait utánozza."""
+
     def __init__(self, base_url: str):
         self.base_url = base_url
         self._session_zones: dict[UUID, str] = {}
@@ -649,17 +664,14 @@ class FakeApiClient:
 
     def close_period(self, token: str, period_id: UUID) -> PeriodOut:
         time.sleep(0.2)
-        for p in self._periods:
+        for i, p in enumerate(self._periods):
             if p.id == period_id:
-                return PeriodOut(
-                    id=p.id,
-                    name=p.name,
-                    year=p.year,
-                    state="CLOSED",
-                    opened_at=p.opened_at,
-                    closed_at=datetime.now(UTC),
-                )
-        raise PeriodOut  # type: ignore
+                if p.state == "CLOSED":
+                    raise ValueError("Az időszak már le van zárva.")
+                closed = p.model_copy(update={"state": "CLOSED", "closed_at": datetime.now(UTC)})
+                self._periods[i] = closed
+                return closed
+        raise ValueError("A megadott időszak nem található.")
 
     def get_comparison(self, token: str, period_id: UUID, zone_code: str) -> ComparisonOut:
         time.sleep(0.3)

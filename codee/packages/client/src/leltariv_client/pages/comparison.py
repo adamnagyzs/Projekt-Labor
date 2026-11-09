@@ -10,9 +10,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -21,8 +21,14 @@ from leltariv_client.dialogs import AssetDetailDialog
 from leltariv_client.worker import Worker
 
 
-class ComparisonPage(QWidget):
+def _id_item(inventory_number: str | None, asset_id: UUID) -> QTableWidgetItem:
+    """A leltárszám cellája; az eszköz azonosítóját is hordozza a dupla kattintáshoz."""
+    item = QTableWidgetItem(inventory_number or "-")
+    item.setData(Qt.ItemDataRole.UserRole, asset_id)
+    return item
 
+
+class ComparisonPage(QWidget):
     def __init__(self, api, token, parent=None):
         super().__init__(parent)
         self.api = api
@@ -32,7 +38,7 @@ class ComparisonPage(QWidget):
 
         layout = QVBoxLayout(self)
 
-        #Fejléc: Időszakválasztó, Körzetválasztó, Frissítés gomb
+        # Fejléc: Időszakválasztó, Körzetválasztó, Frissítés gomb
         filter_layout = QHBoxLayout()
         self.period_combo = QComboBox()
         self.period_combo.currentIndexChanged.connect(self.on_selection_changed)
@@ -50,7 +56,7 @@ class ComparisonPage(QWidget):
         filter_layout.addWidget(self.btn_refresh)
         layout.addLayout(filter_layout)
 
-        #Összesítő sáv és Progress Bar
+        # Összesítő sáv és Progress Bar
         self.summary_label = QLabel("Válassz időszakot és körzetet...")
         layout.addWidget(self.summary_label)
 
@@ -76,7 +82,9 @@ class ComparisonPage(QWidget):
         )
         self.tab_missing.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tab_missing.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.tab_missing.doubleClicked.connect(lambda idx: self.on_row_double_clicked(idx, "MISSING"))
+        self.tab_missing.doubleClicked.connect(
+            lambda idx: self.on_row_double_clicked(idx, "MISSING")
+        )
         self.tabs.addTab(self.tab_missing, "Hiányzik (0)")
 
         self.tab_partial_surplus = QTableWidget(0, 7)
@@ -85,7 +93,9 @@ class ComparisonPage(QWidget):
         )
         self.tab_partial_surplus.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tab_partial_surplus.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.tab_partial_surplus.doubleClicked.connect(lambda idx: self.on_row_double_clicked(idx, "PARTIAL_SURPLUS"))
+        self.tab_partial_surplus.doubleClicked.connect(
+            lambda idx: self.on_row_double_clicked(idx, "PARTIAL_SURPLUS")
+        )
         self.tabs.addTab(self.tab_partial_surplus, "Részleges és többlet (0)")
 
         self.tab_found = QTableWidget(0, 5)
@@ -111,21 +121,27 @@ class ComparisonPage(QWidget):
         self.tab_unknown.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tabs.addTab(self.tab_unknown, "Ismeretlen kód (0)")
 
-        #Fejlécek kitöltése adatokkal
-        for t in (self.tab_missing, self.tab_partial_surplus, self.tab_found, self.tab_foreign, self.tab_unknown):
+        # Fejlécek kitöltése adatokkal
+        for t in (
+            self.tab_missing,
+            self.tab_partial_surplus,
+            self.tab_found,
+            self.tab_foreign,
+            self.tab_unknown,
+        ):
             t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
-        #Kezdeti metaadat betöltés
+        # Kezdeti metaadat betöltés
         self.load_metadata()
 
     def load_metadata(self):
-        #Időszakok lekérése
+        # Időszakok lekérése
         w_per = Worker(self.api.get_periods, self.token)
         w_per.signals.finished.connect(self.on_periods_loaded)
         w_per.signals.error.connect(self.on_error)
         QThreadPool.globalInstance().start(w_per)
 
-        #Körzetek lekérése
+        # Körzetek lekérése
         w_zon = Worker(self.api.get_zones, self.token)
         w_zon.signals.finished.connect(self.on_zones_loaded)
         w_zon.signals.error.connect(self.on_error)
@@ -196,68 +212,66 @@ class ComparisonPage(QWidget):
         else:
             self.closed_badge_label.setText("")
 
-        #Sorbarendezés a szerződés szerint: MISSING, PARTIAL, SURPLUS, FOUND
+        # Sorbarendezés a szerződés szerint: MISSING, PARTIAL, SURPLUS, FOUND
         missing_rows = [r for r in comparison.rows if r.category == "MISSING"]
         partial_surplus_rows = [r for r in comparison.rows if r.category in ("PARTIAL", "SURPLUS")]
         found_rows = [r for r in comparison.rows if r.category == "FOUND"]
 
-        #1. Fül: Hiányzik
+        # 1. Fül: Hiányzik
         self.tab_missing.setUpdatesEnabled(False)
         self.tab_missing.setRowCount(len(missing_rows))
         for r_idx, row in enumerate(missing_rows):
-            self.tab_missing.setItem(r_idx, 0, QTableWidgetItem(row.asset.inventory_number or "-"))
+            self.tab_missing.setItem(r_idx, 0, _id_item(row.asset.inventory_number, row.asset.id))
             self.tab_missing.setItem(r_idx, 1, QTableWidgetItem(row.asset.name))
             self.tab_missing.setItem(r_idx, 2, QTableWidgetItem(str(row.expected)))
             self.tab_missing.setItem(r_idx, 3, QTableWidgetItem(row.found_in_zone or "-"))
-            self.tab_missing.item(r_idx, 0).setData(Qt.ItemDataRole.UserRole, row.asset.id)
         self.tab_missing.setUpdatesEnabled(True)
         self.tabs.setTabText(0, f"Hiányzik ({len(missing_rows)})")
 
-        #2. Fül: Részleges és többlet
+        # 2. Fül: Részleges és többlet
         self.tab_partial_surplus.setUpdatesEnabled(False)
         self.tab_partial_surplus.setRowCount(len(partial_surplus_rows))
         for r_idx, row in enumerate(partial_surplus_rows):
             diff_str = f"+{row.difference}" if row.difference > 0 else str(row.difference)
             status_text = STATUS_LABELS.get(row.status, row.status)
-            self.tab_partial_surplus.setItem(r_idx, 0, QTableWidgetItem(row.asset.inventory_number or "-"))
+            self.tab_partial_surplus.setItem(
+                r_idx, 0, _id_item(row.asset.inventory_number, row.asset.id)
+            )
             self.tab_partial_surplus.setItem(r_idx, 1, QTableWidgetItem(row.asset.name))
             self.tab_partial_surplus.setItem(r_idx, 2, QTableWidgetItem(status_text))
             self.tab_partial_surplus.setItem(r_idx, 3, QTableWidgetItem(str(row.expected)))
             self.tab_partial_surplus.setItem(r_idx, 4, QTableWidgetItem(str(row.counted)))
             self.tab_partial_surplus.setItem(r_idx, 5, QTableWidgetItem(diff_str))
             self.tab_partial_surplus.setItem(r_idx, 6, QTableWidgetItem(row.room or "-"))
-            self.tab_partial_surplus.item(r_idx, 0).setData(Qt.ItemDataRole.UserRole, row.asset.id)
         self.tab_partial_surplus.setUpdatesEnabled(True)
         self.tabs.setTabText(1, f"Részleges és többlet ({len(partial_surplus_rows)})")
 
-        #3. Fül: Megtalált
+        # 3. Fül: Megtalált
         self.tab_found.setUpdatesEnabled(False)
         self.tab_found.setRowCount(len(found_rows))
         for r_idx, row in enumerate(found_rows):
             ver_text = "közvetlen" if row.verification == "DIRECT" else "főeszköz alapján"
-            self.tab_found.setItem(r_idx, 0, QTableWidgetItem(row.asset.inventory_number or "-"))
+            self.tab_found.setItem(r_idx, 0, _id_item(row.asset.inventory_number, row.asset.id))
             self.tab_found.setItem(r_idx, 1, QTableWidgetItem(row.asset.name))
             self.tab_found.setItem(r_idx, 2, QTableWidgetItem(str(row.counted)))
             self.tab_found.setItem(r_idx, 3, QTableWidgetItem(ver_text))
             self.tab_found.setItem(r_idx, 4, QTableWidgetItem(row.room or "-"))
-            self.tab_found.item(r_idx, 0).setData(Qt.ItemDataRole.UserRole, row.asset.id)
         self.tab_found.setUpdatesEnabled(True)
         self.tabs.setTabText(2, f"Megtalált ({len(found_rows)})")
 
-        #4. Fül: Más körzetből
+        # 4. Fül: Más körzetből
         self.tab_foreign.setUpdatesEnabled(False)
         self.tab_foreign.setRowCount(len(comparison.foreign))
         for r_idx, f in enumerate(comparison.foreign):
-            self.tab_foreign.setItem(r_idx, 0, QTableWidgetItem(f.asset.inventory_number or "-"))
+            self.tab_foreign.setItem(r_idx, 0, _id_item(f.asset.inventory_number, f.asset.id))
             self.tab_foreign.setItem(r_idx, 1, QTableWidgetItem(f.asset.name))
             self.tab_foreign.setItem(r_idx, 2, QTableWidgetItem(f.home_zone_code))
             self.tab_foreign.setItem(r_idx, 3, QTableWidgetItem(str(f.quantity)))
             self.tab_foreign.setItem(r_idx, 4, QTableWidgetItem(f.room or "-"))
-            self.tab_foreign.item(r_idx, 0).setData(Qt.ItemDataRole.UserRole, f.asset.id)
         self.tab_foreign.setUpdatesEnabled(True)
         self.tabs.setTabText(3, f"Más körzetből ({len(comparison.foreign)})")
 
-        #5. Fül: Ismeretlen kód
+        # 5. Fül: Ismeretlen kód
         self.tab_unknown.setUpdatesEnabled(False)
         self.tab_unknown.setRowCount(len(comparison.unknown))
         for r_idx, u in enumerate(comparison.unknown):

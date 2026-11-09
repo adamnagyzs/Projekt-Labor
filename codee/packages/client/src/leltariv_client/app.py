@@ -36,8 +36,13 @@ from leltariv_client.pages.rooms import RoomsPage
 from leltariv_client.pages.scanning import ScanningPage
 from leltariv_client.worker import Worker
 
+#: hány sor jöjjön egy lapon. A szerver 100-ban maximálja.
 PAGE_SIZE = 50
+
+#: jobbra igazított oszlopok (mennyiség) — a darabszámok így olvashatók össze
 NUMERIC_COLUMNS = frozenset({5})
+
+#: tabuláris számjegyekkel szedett oszlopok: eszközszám, alszám, leltárszám, mennyiség
 MONOSPACE_COLUMNS = frozenset({0, 1, 3, 5})
 
 
@@ -74,7 +79,9 @@ class AssetTableModel(QAbstractTableModel):
         col = index.column()
 
         if role == Qt.ItemDataRole.DisplayRole:
-            status_text = STATUS_LABELS.get(item.status, item.status) if hasattr(item, "status") else "Aktív"
+            status_text = (
+                STATUS_LABELS.get(item.status, item.status) if hasattr(item, "status") else "Aktív"
+            )
             vals = [
                 item.asset_number,
                 str(item.sub_number),
@@ -126,6 +133,8 @@ class LoginDialog(QDialog):
         self.setFixedSize(350, 250)
 
         self.config_path = get_config_path()
+        # 127.0.0.1, nem localhost: Windowson a localhost előbb IPv6-on próbál, és minden
+        # új kapcsolat (5 mp tétlenség után) 2 másodpercet vár, mielőtt IPv4-re vált.
         saved_url = "http://127.0.0.1:8000"
         saved_email = ""
         if self.config_path.exists():
@@ -134,6 +143,7 @@ class LoginDialog(QDialog):
                 saved_url = conf.get("url", saved_url)
                 saved_email = conf.get("email", saved_email)
             except (OSError, ValueError):
+                # sérült vagy olvashatatlan config: az alapértelmezésekkel indulunk
                 pass
 
         layout = QVBoxLayout(self)
@@ -196,24 +206,22 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.asset_page = self.create_asset_page()
 
-        # Stack indexek:
-        # 0: Áttekintés / Üres
-        # 1: Eszközök
-        # 2: Leltározás
-        # 3: Helyiségek
-        # 4: Adminisztráció
-        # 5: Összehasonlítás
-        self.stack.addWidget(QLabel("Fejlesztés alatt...", alignment=Qt.AlignmentFlag.AlignCenter)) # 0
-        self.stack.addWidget(self.asset_page)                                                     # 1
-        self.stack.addWidget(ScanningPage(api, token))                                              # 2
-        self.stack.addWidget(RoomsPage(api, token))                                                 # 3
-        
+        # A stack indexei: 0 üres, 1 Eszközök, 2 Leltározás, 3 Helyiségek,
+        # 4 Adminisztráció, 5 Összehasonlítás. A menü sorrendje más, ld. on_nav_changed.
+        self.stack.addWidget(
+            QLabel(
+                "Fejlesztés alatt...",
+                alignment=Qt.AlignmentFlag.AlignCenter,
+            )
+        )
+        self.stack.addWidget(self.asset_page)
+        self.stack.addWidget(ScanningPage(api, token))
+        self.stack.addWidget(RoomsPage(api, token))
         self.admin_page = AdminPage(api, token)
         self.admin_page.data_changed.connect(self.reload_data)
-        self.stack.addWidget(self.admin_page)                                                       # 4
-
+        self.stack.addWidget(self.admin_page)
         self.comparison_page = ComparisonPage(api, token)
-        self.stack.addWidget(self.comparison_page)                                                  # 5
+        self.stack.addWidget(self.comparison_page)
 
         self.stack.setCurrentIndex(1)
         v_layout.addWidget(self.stack)
@@ -236,7 +244,14 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentIndex(0)
 
     def reload_data(self):
-        for combo in (self.zone_combo, self.room_combo, self.type_combo, self.person_combo, self.status_combo):
+        # Import vagy visszatöltés után a körzetek, típusok és felelősök is változhattak.
+        for combo in (
+            self.zone_combo,
+            self.room_combo,
+            self.type_combo,
+            self.person_combo,
+            self.status_combo,
+        ):
             combo.blockSignals(True)
             combo.clear()
             if combo is self.status_combo:
@@ -249,7 +264,7 @@ class MainWindow(QMainWindow):
             combo.blockSignals(False)
         self.room_combo.setEnabled(False)
         self.load_metadata()
-        self.load_zones()
+        self.load_zones()  # a végén az első oldalt is újra kéri
 
     def create_asset_page(self):
         page = QWidget()
@@ -260,6 +275,7 @@ class MainWindow(QMainWindow):
         self.search_input.setPlaceholderText("Keresés...")
         self.search_input.textChanged.connect(self.trigger_search)
 
+        # Hol keressen a kereső; az adat a szerver `field` paramétere.
         self.search_field = QComboBox()
         for label, value in (
             ("Mindenhol", "mind"),
@@ -275,6 +291,7 @@ class MainWindow(QMainWindow):
         self.zone_combo.addItem("Mind")
         self.zone_combo.currentTextChanged.connect(self.on_zone_changed)
 
+        # Új szűrők: Típus, Helyiség, Felelős
         self.type_combo = QComboBox()
         self.type_combo.addItem("Mind", None)
         self.type_combo.currentIndexChanged.connect(self.trigger_search)
@@ -285,6 +302,7 @@ class MainWindow(QMainWindow):
         self.room_combo.currentIndexChanged.connect(self.trigger_search)
 
         self.person_combo = QComboBox()
+        # A szűrők a teljes nevet mutassák, ne csak az elejét („Teszt").
         for combo in (self.type_combo, self.room_combo, self.person_combo):
             combo.setSizeAdjustPolicy(
                 QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
@@ -329,6 +347,9 @@ class MainWindow(QMainWindow):
         self.table = QTableView()
         self.model = AssetTableModel()
 
+        # A proxy csak rendez. Szűrni a szerver szűr, mert az a megnevezés mellett a
+        # kódokban is keres — a proxy viszont csak a megnevezés oszlopot látja, tehát
+        # egy leltárszámra keresve kidobná a szerver találatait.
         self.proxy_model = QSortFilterProxyModel()
         self.proxy_model.setSourceModel(self.model)
 
@@ -375,6 +396,7 @@ class MainWindow(QMainWindow):
         item = self.model.item_at(source_index.row())
         dlg = AssetDetailDialog(self.api, self.token, item.id, self)
         dlg.exec()
+        # Csak akkor töltünk újra, ha az adatlapon mentettek: a Típus és Felelős oszlop változott.
         if dlg.saved:
             self.load_page()
 
@@ -425,10 +447,12 @@ class MainWindow(QMainWindow):
         QThreadPool.globalInstance().start(worker)
 
     def load_metadata(self):
+        # Típusok betöltése
         t_worker = Worker(self.api.get_asset_types, self.token)
         t_worker.signals.finished.connect(self.on_asset_types_loaded)
         QThreadPool.globalInstance().start(t_worker)
 
+        # Felelősök betöltése
         p_worker = Worker(self.api.get_persons, self.token)
         p_worker.signals.finished.connect(self.on_persons_loaded)
         QThreadPool.globalInstance().start(p_worker)
@@ -441,6 +465,8 @@ class MainWindow(QMainWindow):
     def on_zones_loaded(self, zones):
         for z in zones:
             self.zone_combo.addItem(z.code)
+        # A körzetek hozzáadása nem váltja meg a „Mind" kijelölést, így az on_zone_changed
+        # nem fut le: az első oldalt itt kell kérni, különben belépés után üres a lista.
         self.trigger_search()
 
     def on_asset_types_loaded(self, types):
@@ -456,6 +482,8 @@ class MainWindow(QMainWindow):
             self.room_combo.addItem(r.label, r.id)
 
     def on_assets_loaded(self, page_data):
+        # Gépelés vagy szűrőváltás közben több kérés is úton lehet, és nem sorrendben
+        # érnek vissza: csak a legutoljára elküldött válaszát mutatjuk.
         if self.sender() is not self.latest_load:
             return
         self.model.update_data(page_data.items)
@@ -487,6 +515,8 @@ def main():
     app = QApplication(sys.argv)
     qdarktheme.setup_theme("auto")
 
+    # Hibás belépés után az ablak visszajön (cím és e-mail marad, a jelszó törlődik);
+    # csak a Mégse lép ki. Különben egy elgépelt jelszó az indítóval a szervert is leállítaná.
     dialog = LoginDialog()
     while dialog.exec() == QDialog.DialogCode.Accepted:
         dialog.save_config()
