@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from leltariv_contracts.assets import STATUS_LABELS
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
     QComboBox,
@@ -16,11 +17,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from leltariv_client.status_dialog import StatusDialog
 from leltariv_client.worker import Worker
 
 
 class AssetDetailDialog(QDialog):
-    """Egy eszköz adatlapja a kódjaival, tartozékaival, típusával és felelősével."""
+    """Egy eszköz adatlapja: kódok, tartozékok, típus, felelős, állapot és előzmények."""
 
     def __init__(self, api, token, asset_id, parent=None):
         super().__init__(parent)
@@ -35,11 +37,22 @@ class AssetDetailDialog(QDialog):
         self.pending_type_id: int | None = None
 
         self.setWindowTitle("Eszköz adatlapja")
-        self.resize(550, 650)
+        self.resize(550, 750)
 
         layout = QVBoxLayout(self)
         self.info_label = QLabel("Adatok betöltése folyamatban...")
         layout.addWidget(self.info_label)
+
+        status_layout = QHBoxLayout()
+        status_layout.addWidget(QLabel("<b>Állapot:</b>"))
+        self.lbl_status = QLabel("Aktív")
+        status_layout.addWidget(self.lbl_status)
+        status_layout.addStretch()
+
+        self.btn_change_status = QPushButton("Állapot módosítása…")
+        self.btn_change_status.clicked.connect(self.open_status_dialog)
+        status_layout.addWidget(self.btn_change_status)
+        layout.addLayout(status_layout)
 
         room_layout = QHBoxLayout()
         room_layout.addWidget(QLabel("<b>Helyiség (aktív):</b>"))
@@ -80,6 +93,10 @@ class AssetDetailDialog(QDialog):
         layout.addWidget(QLabel("Tartozékok (dupla kattintással megnyitható):"))
         layout.addWidget(self.accessories_list)
 
+        layout.addWidget(QLabel("<b>Előzmények:</b>"))
+        self.history_list = QListWidget()
+        layout.addWidget(self.history_list)
+
         btn_close = QPushButton("Bezárás")
         btn_close.clicked.connect(self.accept)
         layout.addWidget(btn_close)
@@ -99,10 +116,17 @@ class AssetDetailDialog(QDialog):
         QThreadPool.globalInstance().start(w_persons)
 
     def load_asset_details(self):
+        # Eszköz részletek lekérése
         worker = Worker(self.api.get_asset, self.token, self.asset_id)
         worker.signals.finished.connect(self.on_loaded)
         worker.signals.error.connect(self.on_error)
         QThreadPool.globalInstance().start(worker)
+
+        # Eszköz előzmények lekérése
+        h_worker = Worker(self.api.get_asset_history, self.token, self.asset_id)
+        h_worker.signals.finished.connect(self.on_history_loaded)
+        h_worker.signals.error.connect(self.on_error)
+        QThreadPool.globalInstance().start(h_worker)
 
     def _fill_types(self, types):
         self.type_combo.clear()
@@ -151,6 +175,7 @@ class AssetDetailDialog(QDialog):
             f"Aktiválva: {detail.activated_on or '-'}"
         )
 
+        self.lbl_status.setText(STATUS_LABELS[detail.status])
         self.lbl_room.setText(detail.room or "még nem olvasták be")
         self._select_current()
 
@@ -166,6 +191,25 @@ class AssetDetailDialog(QDialog):
             self.accessories_list.addItem("Nincs tartozéka.")
         for acc in self.loaded_accessories:
             self.accessories_list.addItem(f"{acc.asset_number}/{acc.sub_number} – {acc.name}")
+
+    def on_history_loaded(self, history_entries):
+        self.history_list.clear()
+        if not history_entries:
+            self.history_list.addItem("Nincs előzmény.")
+            return
+        for entry in history_entries:
+            time_str = entry.at.astimezone().strftime("%Y.%m.%d. %H:%M")
+            by_str = f" ({entry.by})" if entry.by else ""
+            line = f"{time_str} · {entry.text}{by_str}"
+            self.history_list.addItem(line)
+
+    def open_status_dialog(self):
+        # Dani ablaka: kötelező indoklás, és a mentés alatt nem zárható be
+        current = self.current_detail.status if self.current_detail is not None else "ACTIVE"
+        dialog = StatusDialog(self.api, self.token, self.asset_id, current, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.saved = True
+            self.load_asset_details()
 
     def save_asset_type(self):
         selected_type_id = self.type_combo.currentData()

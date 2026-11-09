@@ -12,10 +12,21 @@ from leltariv_contracts.assets import (
     AssetListItem,
     AssetPage,
     AssetTypeOut,
+    HistoryEntry,
     PersonOut,
+    StatusChangeOut,
 )
 from leltariv_contracts.auth import LoginRequest, LoginResponse
-from leltariv_contracts.inventory import PeriodOut, ScanOut, SessionOut
+from leltariv_contracts.inventory import (
+    ComparisonOut,
+    ComparisonRow,
+    ComparisonSummary,
+    ForeignFind,
+    PeriodOut,
+    ScanOut,
+    SessionOut,
+    UnknownCode,
+)
 from leltariv_contracts.rooms import RoomOut
 from leltariv_contracts.zones import ZoneOut
 
@@ -41,6 +52,7 @@ class ApiClient(Protocol):
         asset_type_id: int | None = None,
         room_id: UUID | None = None,
         person_id: UUID | None = None,
+        status: str | None = None,
     ) -> AssetPage: ...
     def get_asset(self, token: str, asset_id: UUID) -> AssetDetail: ...
     def get_asset_types(self, token: str) -> list[AssetTypeOut]: ...
@@ -70,6 +82,11 @@ class ApiClient(Protocol):
     def get_periods(self, token: str) -> list[PeriodOut]: ...
     def create_period(self, token: str, name: str, year: int) -> PeriodOut: ...
     def close_period(self, token: str, period_id: UUID) -> PeriodOut: ...
+    def get_comparison(self, token: str, period_id: UUID, zone_code: str) -> ComparisonOut: ...
+    def get_asset_history(self, token: str, asset_id: UUID) -> list[HistoryEntry]: ...
+    def change_asset_status(
+        self, token: str, asset_id: UUID, status: str, reason: str
+    ) -> StatusChangeOut: ...
 
 
 class HttpApiClient:
@@ -117,6 +134,8 @@ class HttpApiClient:
             ) from error
 
         if response.is_success:
+            if response.status_code == 204 or not response.content:
+                return {}
             return response.json()
 
         # A FastAPI hibaválasza {"detail": "..."} — ha mégsem az jön, a státuszt mutatjuk.
@@ -150,6 +169,7 @@ class HttpApiClient:
         asset_type_id: int | None = None,
         room_id: UUID | None = None,
         person_id: UUID | None = None,
+        status: str | None = None,
     ) -> AssetPage:
         params: dict[str, str | int] = {"page": page, "page_size": page_size}
         if zone:
@@ -169,6 +189,8 @@ class HttpApiClient:
             params["room_id"] = str(room_id)
         if person_id is not None:
             params["person_id"] = str(person_id)
+        if status:
+            params["status"] = status
 
         payload = self._request("GET", "/assets", token=token, params=params)
         return AssetPage.model_validate(payload)
@@ -285,6 +307,27 @@ class HttpApiClient:
         payload = self._request("POST", f"/periods/{period_id}/close", token=token)
         return PeriodOut.model_validate(payload)
 
+    def get_comparison(self, token: str, period_id: UUID, zone_code: str) -> ComparisonOut:
+        payload = self._request(
+            "GET", f"/periods/{period_id}/comparison", token=token, params={"zone_code": zone_code}
+        )
+        return ComparisonOut.model_validate(payload)
+
+    def get_asset_history(self, token: str, asset_id: UUID) -> list[HistoryEntry]:
+        payload = self._request("GET", f"/assets/{asset_id}/history", token=token)
+        return [HistoryEntry.model_validate(item) for item in payload]  # type: ignore[union-attr]
+
+    def change_asset_status(
+        self, token: str, asset_id: UUID, status: str, reason: str
+    ) -> StatusChangeOut:
+        payload = self._request(
+            "PATCH",
+            f"/assets/{asset_id}/status",
+            token=token,
+            json={"status": status, "reason": reason},
+        )
+        return StatusChangeOut.model_validate(payload)
+
 
 #: a hamis kliens állománya; a leltárszámok szándékosan körzetenként különböznek
 FAKE_ASSETS = [
@@ -300,6 +343,7 @@ FAKE_ASSETS = [
         serial_number="SN12345",
         asset_type="Számítógép",
         responsible="Kovács Anna",
+        status="ACTIVE",
     ),
     AssetListItem(
         id=uuid4(),
@@ -313,6 +357,7 @@ FAKE_ASSETS = [
         serial_number=None,
         asset_type="Bútor",
         responsible=None,
+        status="ACTIVE",
     ),
     AssetListItem(
         id=uuid4(),
@@ -326,6 +371,7 @@ FAKE_ASSETS = [
         serial_number="OSZ-99",
         asset_type="Egyéb",
         responsible="Nagy Béla",
+        status="ACTIVE",
     ),
     AssetListItem(
         id=uuid4(),
@@ -339,6 +385,7 @@ FAKE_ASSETS = [
         serial_number=None,
         asset_type="Bútor",
         responsible=None,
+        status="ACTIVE",
     ),
 ]
 
@@ -378,6 +425,29 @@ class FakeApiClient:
                 ),
             ],
         }
+        self._periods = [
+            PeriodOut(
+                id=uuid4(),
+                name="2026. évi leltár",
+                year=2026,
+                state="ACTIVE",
+                opened_at=datetime.now(UTC),
+                closed_at=None,
+            )
+        ]
+        self._statuses: dict[UUID, str] = {asset.id: "ACTIVE" for asset in FAKE_ASSETS}
+        self._histories: dict[UUID, list[HistoryEntry]] = {
+            asset.id: [
+                HistoryEntry(
+                    at=datetime.now(UTC),
+                    kind="CREATED",
+                    text=f"Létrehozva: {asset.name}",
+                    by="Teszt Elek",
+                    period="2026. évi leltár",
+                )
+            ]
+            for asset in FAKE_ASSETS
+        }
 
     def login(self, request: LoginRequest) -> LoginResponse:
         time.sleep(1)
@@ -410,9 +480,18 @@ class FakeApiClient:
         asset_type_id: int | None = None,
         room_id: UUID | None = None,
         person_id: UUID | None = None,
+        status: str | None = None,
     ) -> AssetPage:
         time.sleep(0.5)
-        items = FAKE_ASSETS
+        items = []
+        for asset in FAKE_ASSETS:
+            cur_status = self._statuses.get(asset.id, "ACTIVE")
+            # Frissítjük a status mezőt a listaelemben
+            item = asset.model_copy(update={"status": cur_status})  # type: ignore
+            items.append(item)
+
+        if status:
+            items = [i for i in items if i.status == status]
         if q:
             items = [i for i in items if q.lower() in i.name.lower()]
         if zone:
@@ -429,6 +508,7 @@ class FakeApiClient:
         item = next((i for i in FAKE_ASSETS if i.id == asset_id), None)
         if item is None:
             raise ValueError("A megadott eszköz nem található.")
+        cur_status = self._statuses.get(asset_id, "ACTIVE")
         return AssetDetail(
             id=item.id,
             asset_number=item.asset_number,
@@ -443,6 +523,7 @@ class FakeApiClient:
             asset_type_id=1,
             room=None,
             responsible=None,
+            status=cur_status,  # type: ignore
         )
 
     def get_asset_types(self, token: str) -> list[AssetTypeOut]:
@@ -562,4 +643,148 @@ class FakeApiClient:
             period_name="2026. évi leltár",
             started_at=datetime.now(UTC),
             closed_at=datetime.now(UTC),
+        )
+
+    def get_periods(self, token: str) -> list[PeriodOut]:
+        time.sleep(0.2)
+        return self._periods
+
+    def create_period(self, token: str, name: str, year: int) -> PeriodOut:
+        time.sleep(0.2)
+        new_p = PeriodOut(
+            id=uuid4(),
+            name=name,
+            year=year,
+            state="ACTIVE",
+            opened_at=datetime.now(UTC),
+            closed_at=None,
+        )
+        self._periods.insert(0, new_p)
+        return new_p
+
+    def close_period(self, token: str, period_id: UUID) -> PeriodOut:
+        time.sleep(0.2)
+        for i, p in enumerate(self._periods):
+            if p.id == period_id:
+                if p.state == "CLOSED":
+                    raise ValueError("Az időszak már le van zárva.")
+                closed = p.model_copy(update={"state": "CLOSED", "closed_at": datetime.now(UTC)})
+                self._periods[i] = closed
+                return closed
+        raise ValueError("A megadott időszak nem található.")
+
+    def get_comparison(self, token: str, period_id: UUID, zone_code: str) -> ComparisonOut:
+        time.sleep(0.3)
+        zone_assets = [a for a in FAKE_ASSETS if a.zone_code == zone_code]
+        rows = []
+        found_cnt = 0
+        missing_cnt = 0
+
+        for idx, asset in enumerate(zone_assets):
+            if idx == 0:
+                cat = "FOUND"
+                exp = asset.quantity
+                cnt = asset.quantity
+                found_cnt += 1
+            elif idx == 1:
+                cat = "PARTIAL"
+                exp = asset.quantity
+                cnt = max(0, asset.quantity - 1)
+                found_cnt += 1
+            else:
+                cat = "MISSING"
+                exp = asset.quantity
+                cnt = 0
+                missing_cnt += 1
+
+            rows.append(
+                ComparisonRow(
+                    asset=asset,
+                    status=self._statuses.get(asset.id, "ACTIVE"),  # type: ignore
+                    expected=exp,
+                    counted=cnt,
+                    difference=cnt - exp,
+                    category=cat,  # type: ignore
+                    verification="DIRECT" if cnt > 0 else None,
+                    room="I-101",
+                    found_in_zone=None,
+                )
+            )
+
+        summary = ComparisonSummary(
+            expected_assets=len(zone_assets),
+            found=found_cnt,
+            inherited=0,
+            partial=1 if len(zone_assets) > 1 else 0,
+            missing=missing_cnt,
+            surplus=0,
+            foreign=1,
+            unknown=1,
+            progress_percent=float(found_cnt) / max(1, len(zone_assets)) * 100.0,
+        )
+
+        foreign_finds = [
+            ForeignFind(
+                asset=FAKE_ASSETS[0],
+                home_zone_code="261",
+                quantity=1,
+                room="G-202",
+            )
+        ]
+        unknown_codes = [
+            UnknownCode(
+                raw_code="UNKNOWN-999",
+                quantity=1,
+                room="G-202",
+            )
+        ]
+
+        period = next((p for p in self._periods if p.id == period_id), self._periods[0])
+        return ComparisonOut(
+            period=period,
+            zone_code=zone_code,
+            summary=summary,
+            rows=rows,
+            foreign=foreign_finds,
+            unknown=unknown_codes,
+        )
+
+    def get_asset_history(self, token: str, asset_id: UUID) -> list[HistoryEntry]:
+        time.sleep(0.2)
+        if asset_id in self._histories:
+            return self._histories[asset_id]
+        return [
+            HistoryEntry(
+                at=datetime.now(UTC),
+                kind="CREATED",
+                text="Eszköz rögzítve a rendszerben.",
+                by="Teszt Elek",
+                period="2026. évi leltár",
+            )
+        ]
+
+    def change_asset_status(
+        self, token: str, asset_id: UUID, status: str, reason: str
+    ) -> StatusChangeOut:
+        time.sleep(0.2)
+        old_status = self._statuses.get(asset_id, "ACTIVE")
+        self._statuses[asset_id] = status
+
+        entry = HistoryEntry(
+            at=datetime.now(UTC),
+            kind="STATUS",
+            text=f"Állapot: {old_status} → {status}. Indoklás: {reason}",
+            by="Teszt Elek",
+            period="2026. évi leltár",
+        )
+        self._histories.setdefault(asset_id, []).insert(0, entry)
+
+        return StatusChangeOut(
+            id=uuid4(),
+            asset_id=asset_id,
+            old_status=old_status,  # type: ignore
+            new_status=status,  # type: ignore
+            reason=reason,
+            changed_at=datetime.now(UTC),
+            changed_by="Teszt Elek",
         )

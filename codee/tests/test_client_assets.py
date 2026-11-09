@@ -13,6 +13,7 @@ from leltariv_contracts.assets import (
     AssetListItem,
     AssetPage,
     AssetTypeOut,
+    HistoryEntry,
     PersonOut,
 )
 from leltariv_contracts.inventory import SessionOut
@@ -102,6 +103,9 @@ class FakeApi:
         return SessionOut(
             id=uuid4(), zone_code=zone_code, period_name="2026", started_at=datetime.now(UTC)
         )
+
+    def get_asset_history(self, token: str, asset_id: UUID) -> list[HistoryEntry]:
+        return [HistoryEntry(at=datetime.now(UTC), kind="CREATED", text="Felvéve.")]
 
 
 @pytest.fixture(autouse=True)

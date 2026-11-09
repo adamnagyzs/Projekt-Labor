@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import qdarktheme
+from leltariv_contracts.assets import STATUS_LABELS
 from leltariv_contracts.auth import LoginRequest
 from PySide6.QtCore import QAbstractTableModel, QSortFilterProxyModel, Qt, QThreadPool
 from PySide6.QtGui import QFont
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 from leltariv_client.api import HttpApiClient
 from leltariv_client.dialogs import AssetDetailDialog
 from leltariv_client.pages.admin import AdminPage
+from leltariv_client.pages.comparison import ComparisonPage
 from leltariv_client.pages.rooms import RoomsPage
 from leltariv_client.pages.scanning import ScanningPage
 from leltariv_client.worker import Worker
@@ -67,6 +69,7 @@ class AssetTableModel(QAbstractTableModel):
             "Gyári szám",
             "Típus",
             "Felelős",
+            "Állapot",
         ]
 
     def data(self, index, role: int = Qt.ItemDataRole.DisplayRole):
@@ -76,6 +79,9 @@ class AssetTableModel(QAbstractTableModel):
         col = index.column()
 
         if role == Qt.ItemDataRole.DisplayRole:
+            status_text = (
+                STATUS_LABELS.get(item.status, item.status) if hasattr(item, "status") else "Aktív"
+            )
             vals = [
                 item.asset_number,
                 str(item.sub_number),
@@ -87,6 +93,7 @@ class AssetTableModel(QAbstractTableModel):
                 item.serial_number or "-",
                 item.asset_type or "",
                 item.responsible or "",
+                status_text,
             ]
             return vals[col]
 
@@ -182,6 +189,7 @@ class MainWindow(QMainWindow):
             "Eszközök",
             "Leltározás",
             "Helyiségek",
+            "Összehasonlítás",
             "Riportok",
             "Adminisztráció",
         ]:
@@ -197,6 +205,9 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.asset_page = self.create_asset_page()
+
+        # A stack indexei: 0 üres, 1 Eszközök, 2 Leltározás, 3 Helyiségek,
+        # 4 Adminisztráció, 5 Összehasonlítás. A menü sorrendje más, ld. on_nav_changed.
         self.stack.addWidget(
             QLabel(
                 "Fejlesztés alatt...",
@@ -209,6 +220,9 @@ class MainWindow(QMainWindow):
         self.admin_page = AdminPage(api, token)
         self.admin_page.data_changed.connect(self.reload_data)
         self.stack.addWidget(self.admin_page)
+        self.comparison_page = ComparisonPage(api, token)
+        self.stack.addWidget(self.comparison_page)
+
         self.stack.setCurrentIndex(1)
         v_layout.addWidget(self.stack)
         h_layout.addLayout(v_layout)
@@ -219,20 +233,34 @@ class MainWindow(QMainWindow):
         self.load_metadata()
 
     def on_nav_changed(self, i: int):
-        # 1 = Eszközök, 2 = Leltározás, 3 = Helyiségek, 5 = Adminisztráció; a többi 0
+        # 1 Eszközök, 2 Leltározás, 3 Helyiségek, 4 Összehasonlítás, 6 Adminisztráció; a többi 0
         if i in (1, 2, 3):
             self.stack.setCurrentIndex(i)
-        elif i == 5:
-            self.stack.setCurrentIndex(4)
+        elif i == 4:
+            self.stack.setCurrentIndex(5)  # Összehasonlítás
+        elif i == 6:
+            self.stack.setCurrentIndex(4)  # Adminisztráció
         else:
             self.stack.setCurrentIndex(0)
 
     def reload_data(self):
         # Import vagy visszatöltés után a körzetek, típusok és felelősök is változhattak.
-        for combo in (self.zone_combo, self.room_combo, self.type_combo, self.person_combo):
+        for combo in (
+            self.zone_combo,
+            self.room_combo,
+            self.type_combo,
+            self.person_combo,
+            self.status_combo,
+        ):
             combo.blockSignals(True)
             combo.clear()
-            combo.addItem("Mind", None)
+            if combo is self.status_combo:
+                combo.addItem("Mind", None)
+                for st, lbl in STATUS_LABELS.items():
+                    combo.addItem(lbl, st)
+                combo.setCurrentIndex(1)  # Alapból Aktív
+            else:
+                combo.addItem("Mind", None)
             combo.blockSignals(False)
         self.room_combo.setEnabled(False)
         self.load_metadata()
@@ -283,6 +311,18 @@ class MainWindow(QMainWindow):
         self.person_combo.addItem("Mind", None)
         self.person_combo.currentIndexChanged.connect(self.trigger_search)
 
+        # Új státusz szűrő — Alapból „Aktív”
+        self.status_combo = QComboBox()
+        self.status_combo.addItem("Mind", None)
+        for st, lbl in STATUS_LABELS.items():
+            self.status_combo.addItem(lbl, st)
+        # Aktív beállítása alapértelmezettnek ("ACTIVE")
+        for idx in range(self.status_combo.count()):
+            if self.status_combo.itemData(idx) == "ACTIVE":
+                self.status_combo.setCurrentIndex(idx)
+                break
+        self.status_combo.currentIndexChanged.connect(self.trigger_search)
+
         self.main_only_cb = QCheckBox("Csak főeszközök")
         self.multi_only_cb = QCheckBox("Csak többdarabos")
         self.main_only_cb.toggled.connect(self.trigger_search)
@@ -296,6 +336,8 @@ class MainWindow(QMainWindow):
         filter_layout.addWidget(self.type_combo)
         filter_layout.addWidget(QLabel("Felelős:"))
         filter_layout.addWidget(self.person_combo)
+        filter_layout.addWidget(QLabel("Állapot:"))
+        filter_layout.addWidget(self.status_combo)
         filter_layout.addWidget(self.main_only_cb)
         filter_layout.addWidget(self.multi_only_cb)
         filter_layout.addWidget(self.search_field)
@@ -376,6 +418,7 @@ class MainWindow(QMainWindow):
         asset_type_id = self.type_combo.currentData()
         room_id = self.room_combo.currentData()
         person_id = self.person_combo.currentData()
+        status_filter = self.status_combo.currentData()
 
         worker = Worker(
             self.api.get_assets,
@@ -390,6 +433,7 @@ class MainWindow(QMainWindow):
             asset_type_id=asset_type_id,
             room_id=room_id,
             person_id=person_id,
+            status=status_filter,
         )
         worker.signals.finished.connect(self.on_assets_loaded)
         worker.signals.error.connect(self.on_error)

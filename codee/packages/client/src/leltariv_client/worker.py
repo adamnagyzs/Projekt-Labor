@@ -1,3 +1,4 @@
+import contextlib
 import traceback
 from collections.abc import Callable
 from typing import Any
@@ -22,7 +23,15 @@ class Worker(QRunnable):
     def run(self) -> None:
         try:
             result = self.fn(*self.args, **self.kwargs)
-            self.signals.finished.emit(result)
         except Exception as e:
             traceback.print_exc()
-            self.signals.error.emit(str(e))
+            self._emit(self.signals.error, str(e))
+        else:
+            self._emit(self.signals.finished, result)
+
+    @staticmethod
+    def _emit(signal: Any, value: object) -> None:
+        # Ha a kérés közben bezárták az ablakot vagy kiléptek a programból, a jelzés Qt-oldali
+        # objektuma már nem létezik; a választ ilyenkor nincs kinek megmutatni.
+        with contextlib.suppress(RuntimeError):
+            signal.emit(value)
